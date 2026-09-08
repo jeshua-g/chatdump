@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { CrtBackground } from "@/src/shaders/crt/CrtBackground";
 
 type Message = {
   id: string;
@@ -33,7 +34,6 @@ export function Chat() {
   const [live, setLive] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const seen = useRef(new Set<string>());
-  const logRef = useRef<HTMLOListElement>(null);
 
   useEffect(() => {
     setNick(localStorage.getItem("nick") ?? "");
@@ -78,10 +78,6 @@ export function Chat() {
     };
   }, []);
 
-  useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-  }, [messages]);
-
   function join(e: FormEvent) {
     e.preventDefault();
     const name = nick.trim();
@@ -116,6 +112,19 @@ export function Chat() {
 
   return (
     <div className="app">
+      <div className="shader-frame">
+        <CrtBackground
+          variant="terminal"
+          speed={1.00}
+          typeSpeed={1.00}
+          motion={1.00}
+          hue={0}
+          saturation={1.00}
+          brightness={1.00}
+          opacity={1.00}
+          messages={messages}
+        />
+      </div>
       <header>
         <div>
           <p className="kicker">guest room</p>

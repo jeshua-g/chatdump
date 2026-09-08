@@ -2,20 +2,39 @@ import { CRT_SCREENS, CRT_STYLES, type CrtStyle, type CrtVariant } from "./crtSc
 import { CRT_FRAGMENT_SHADER, CRT_VERTEX_SHADER } from "./crtShaders";
 
 export const CRT_VARIANTS = ["terminal", "cinematic", "blue-screen", "nintendo"] as const;
-export type CrtOptions = { variant: CrtVariant; speed: number; typeSpeed: number; motion: number; brightness: number; opacity: number; hue: number; saturation: number };
-export const CRT_DEFAULTS: CrtOptions = { variant: "terminal", speed: 1, typeSpeed: 1, motion: 1, brightness: 1, opacity: 1, hue: 0, saturation: 1 };
+export type CrtChatLine = { id: string; sender: string; body: string };
+export type CrtOptions = { variant: CrtVariant; speed: number; typeSpeed: number; motion: number; brightness: number; opacity: number; hue: number; saturation: number; messages: CrtChatLine[] };
+export const CRT_DEFAULTS: CrtOptions = { variant: "terminal", speed: 1, typeSpeed: 1, motion: 1, brightness: 1, opacity: 1, hue: 0, saturation: 1, messages: [] };
 export const crtStyle = (variant: CrtVariant): CrtStyle => CRT_STYLES[variant] ?? CRT_STYLES.terminal;
 type Segment = { t: string; c: "p" | "d" | "a" | "h" };
-const segment = (text: string, color: Segment["c"] = "p"): Segment => ({ t: text, c: color }); const dots = (count: number) => "·".repeat(count);
-const LOG: Segment[][] = [
-  [segment("ZION MAINFRAME  v9.1.1"), segment("   (c) 2199 Nebuchadnezzar", "d")], [segment("CONSTRUCT Broadcast  Rev M  S/N NX-0101-0011", "d")], [],
-  [segment("Hacking Matrix grid nodes "), segment(`${dots(14)} `, "d"), segment("OK", "a")], [segment("Neural Jack  0x000-0x0FF "), segment(`${dots(11)} `, "d"), segment("ONLINE "), segment("OK", "a")], [segment("Pinging agent signatures "), segment(`${dots(6)} `, "d"), segment("3 found")],
-  [segment("nav0  OPERATOR UPLINK SECURE ", "d"), segment(`${dots(6)} `, "d"), segment("READY", "a")], [segment("vis0  CODE RAIN DECRYPT 256bit ", "d"), segment("READY", "a")], [segment("net0  HARDLINE CONNECTION MAX ", "d"), segment(`${dots(4)} `, "d"), segment("LINK", "a")], [segment("red0  RED PILL EXTRACTION ", "d"), segment(`${dots(4)} `, "d"), segment("READY", "a")],
-  [segment("Mounting /dev/mind -> ROOT: "), segment(`${dots(6)} `, "d"), segment("OK", "a")], [segment("Loading weapon training program "), segment(`${dots(4)} `, "d"), segment("OK", "a")], [segment("Starting [ jmp spd str wpn ] "), segment(`${dots(4)} `, "d"), segment("OK", "a")], [segment("Locating the Oracle sector "), segment(`${dots(6)} `, "d"), segment("99.9%")], [],
-  [segment("SYSTEM ANOMALY  "), segment("detected.", "h")], [segment("subject Thomas A. Anderson   status asleep ", "d"), segment("z", "d"), segment("Z", "d")], [], [segment("wake up: ")],
-];
+const segment = (text: string, color: Segment["c"] = "p"): Segment => ({ t: text, c: color });
+const WRAP = 56;
+function wrapBody(text: string) {
+  const out: string[] = [];
+  for (const para of text.replace(/\s+/g, " ").trim().split("\n")) {
+    let rest = para;
+    if (!rest) { out.push(""); continue; }
+    while (rest.length > WRAP) {
+      out.push(rest.slice(0, WRAP));
+      rest = rest.slice(WRAP);
+    }
+    out.push(rest);
+  }
+  return out.length ? out : [""];
+}
+function chatLog(messages: CrtChatLine[]): Segment[][] {
+  if (!messages.length) return [[segment("")]];
+  const rows: Segment[][] = [];
+  for (const msg of messages) {
+    const parts = wrapBody(msg.body.slice(0, 400));
+    rows.push([segment(msg.sender.slice(0, 24), "a"), segment("  ", "d"), segment(parts[0], "p")]);
+    for (const extra of parts.slice(1)) rows.push([segment(extra, "p")]);
+    rows.push([]);
+  }
+  return rows;
+}
 const COLORS = { p: { fill: "#8df0b4", glow: "rgba(28,236,132,0.95)" }, d: { fill: "#4f9a76", glow: "rgba(28,236,132,0.45)" }, a: { fill: "#ffba5e", glow: "rgba(255,150,52,0.95)" }, h: { fill: "#eafff3", glow: "rgba(120,255,190,0.95)" } };
-const lineLength = (line: Segment[]) => line.reduce((total, item) => total + item.t.length, 0); const TOTAL = LOG.reduce((total, line) => total + lineLength(line), 0); const MAX_CHARS = Math.max(...LOG.map(lineLength));
+const lineLength = (line: Segment[]) => line.reduce((total, item) => total + item.t.length, 0);
 /* backing-store ceiling: the composite is one triangle, so the cost that matters is
    the 2D screen redraw and its upload, not the fragment pass */
 const MAX_BUFFER_WIDTH = 1920, MIN_BUFFER_WIDTH = 640, MAX_BUFFER_PIXELS = 2_400_000;
@@ -28,14 +47,31 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
   const uniform = (name: string) => gl.getUniformLocation(program, name);
   const uTexture = uniform("uTex"), uResolution = uniform("uRes"), uTime = uniform("uTime"), uMotion = uniform("uMotion"), uCurve = uniform("uCurve"), uScan = uniform("uScan"), uScanDepth = uniform("uScanDepth"), uTriad = uniform("uTriad"), uGrille = uniform("uGrille"), uChroma = uniform("uChroma"), uBar = uniform("uBar"), uFlicker = uniform("uFlicker"), uGrain = uniform("uGrain"), uNoise = uniform("uNoise"), uVignette = uniform("uVignette"), uMono = uniform("uMono"), uGain = uniform("uGain"), uHalo = uniform("uHalo"), uSheen = uniform("uSheen"), uRoom = uniform("uRoom");
   const texture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, texture); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); gl.uniform1i(uTexture, 0);
-  let width = 1, height = 1, cssWidth = 1, cssHeight = 1, fontSize = 14, lineHeight = 20, startY = 0, charWidth = 8, caretX = 0, caretY = 0, typed = 0, done = false, textDirty = true, lastTextAt = 0, lastReveal = -1, lastBlink = -1, variant: CrtVariant = "terminal", style = crtStyle(variant); const startedAt = performance.now();
+  let width = 1, height = 1, cssWidth = 1, cssHeight = 1, fontSize = 14, lineHeight = 20, startY = 0, charWidth = 8, caretX = 0, caretY = 0, typed = 0, done = false, textDirty = true, lastTextAt = 0, lastReveal = -1, lastBlink = -1, variant: CrtVariant = "terminal", style = crtStyle(variant), log = chatLog([]), total = 0, maxChars = 1, feedSig = ""; const startedAt = performance.now();
+  const measure = () => { total = log.reduce((n, line) => n + lineLength(line), 0); maxChars = Math.max(1, ...log.map(lineLength)); };
+  const syncFeed = (messages: CrtChatLine[]) => {
+    const sig = messages.map((m) => m.id).join("\n");
+    if (sig === feedSig) return;
+    const prevTotal = total;
+    log = chatLog(messages);
+    measure();
+    feedSig = sig;
+    if (prevTotal === 0 && total > 0) { typed = total; done = true; }
+    else if (total > prevTotal) { typed = prevTotal; done = false; }
+    else { typed = total; done = true; }
+    layout();
+    lastReveal = -1;
+    lastBlink = -1;
+    lastTextAt = 0;
+    textDirty = true;
+  };
   const applyStyle = () => { gl.useProgram(program); gl.uniform2f(uCurve, style.curve[0], style.curve[1]); gl.uniform1f(uScanDepth, style.scanDepth); gl.uniform1f(uGrille, style.grille); gl.uniform1f(uChroma, style.chroma); gl.uniform1f(uBar, style.bar); gl.uniform1f(uFlicker, style.flicker); gl.uniform1f(uGrain, style.grain); gl.uniform1f(uNoise, style.noise); gl.uniform1f(uVignette, style.vignette); gl.uniform1f(uMono, style.mono); gl.uniform1f(uGain, style.gain); gl.uniform1f(uHalo, style.halo); gl.uniform3f(uSheen, style.sheen[0], style.sheen[1], style.sheen[2]); gl.uniform3f(uRoom, style.room[0], style.room[1], style.room[2]); const filter = style.filtering === "nearest" ? gl.NEAREST : gl.LINEAR; gl.bindTexture(gl.TEXTURE_2D, texture); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter); };
-  const layout = () => { startY = height * 0.135; lineHeight = height * 0.74 / LOG.length; fontSize = Math.max(5, Math.min(lineHeight * 0.8, width * 0.88 / (Math.max(MAX_CHARS, 1) * 0.62))); textContext.font = `600 ${fontSize.toFixed(2)}px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace`; charWidth = textContext.measureText("M").width || fontSize * 0.6; };
+  const layout = () => { startY = height * 0.135; lineHeight = height * 0.74 / Math.max(log.length, 1); fontSize = Math.max(5, Math.min(lineHeight * 0.8, width * 0.88 / (Math.max(maxChars, 1) * 0.62))); textContext.font = `600 ${fontSize.toFixed(2)}px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace`; charWidth = textContext.measureText("M").width || fontSize * 0.6; };
   const setStyle = (key: Segment["c"], glow: boolean) => { const color = COLORS[key]; textContext.fillStyle = color.fill; textContext.shadowColor = glow ? color.glow : "transparent"; textContext.shadowBlur = glow ? fontSize * 0.38 : 0; };
   /* two passes per glyph: a soft phosphor halo, then the same glyph re-filled with
      the shadow off so the stroke core stays crisp at any backing resolution */
-  const drawScreen = (reveal: number) => { textContext.setTransform(1, 0, 0, 1, 0, 0); textContext.fillStyle = "#03100a"; textContext.fillRect(0, 0, width, height); textContext.textAlign = "left"; textContext.textBaseline = "top"; textContext.font = `600 ${fontSize.toFixed(2)}px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace`; let remaining = reveal, y = startY; caretX = Math.floor((width - MAX_CHARS * charWidth) / 2); caretY = startY;
-    for (const line of LOG) { const length = lineLength(line), visible = reveal === Infinity ? Infinity : Math.min(remaining, length); let x = Math.floor((width - MAX_CHARS * charWidth) / 2), drawn = 0; for (const item of line) { let text = item.t; if (visible !== Infinity) { const left = visible - drawn; if (left <= 0) break; if (left < text.length) text = text.slice(0, left); } if (text.length) { setStyle(item.c, true); textContext.fillText(text, x, y); setStyle(item.c, false); textContext.fillText(text, x, y); x += charWidth * text.length; } drawn += item.t.length; if (visible !== Infinity && drawn >= visible) break; } caretX = x; caretY = y; if (visible !== Infinity) remaining -= visible; y += lineHeight; if (visible !== Infinity && remaining <= 0) break; }
+  const drawScreen = (reveal: number) => { textContext.setTransform(1, 0, 0, 1, 0, 0); textContext.fillStyle = "#03100a"; textContext.fillRect(0, 0, width, height); textContext.textAlign = "left"; textContext.textBaseline = "top"; textContext.font = `600 ${fontSize.toFixed(2)}px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace`; let remaining = reveal, y = startY; caretX = Math.floor((width - maxChars * charWidth) / 2); caretY = startY;
+    for (const line of log) { const length = lineLength(line), visible = reveal === Infinity ? Infinity : Math.min(remaining, length); let x = Math.floor((width - maxChars * charWidth) / 2), drawn = 0; for (const item of line) { let text = item.t; if (visible !== Infinity) { const left = visible - drawn; if (left <= 0) break; if (left < text.length) text = text.slice(0, left); } if (text.length) { setStyle(item.c, true); textContext.fillText(text, x, y); setStyle(item.c, false); textContext.fillText(text, x, y); x += charWidth * text.length; } drawn += item.t.length; if (visible !== Infinity && drawn >= visible) break; } caretX = x; caretY = y; if (visible !== Infinity) remaining -= visible; y += lineHeight; if (visible !== Infinity && remaining <= 0) break; }
   };
   const drawCursor = () => { textContext.shadowColor = COLORS.p.glow; textContext.shadowBlur = fontSize * 0.42; textContext.fillStyle = "#bdf8d2"; textContext.fillRect(caretX, caretY + fontSize * 0.06, Math.max(charWidth * 0.92, 4), fontSize * 0.96); textContext.shadowBlur = 0; textContext.fillRect(caretX, caretY + fontSize * 0.06, Math.max(charWidth * 0.92, 4), fontSize * 0.96); };
   const uploadTexture = () => { gl.bindTexture(gl.TEXTURE_2D, texture); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); textDirty = false; };
@@ -51,8 +87,9 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
     render(now: number) {
       const options = getOptions(), requested = CRT_STYLES[options.variant] ? options.variant : "terminal";
       if (requested !== variant) { variant = requested; style = crtStyle(variant); applyStyle(); typed = 0; done = false; lastReveal = -1; lastBlink = -1; lastTextAt = 0; resize(); }
+      if (variant === "terminal") syncFeed(options.messages ?? []);
       const seconds = (now - startedAt) * 0.001 * options.speed;
-      if (variant === "terminal") { if (!done) { typed += 4.4 * options.typeSpeed; if (typed >= TOTAL) { typed = TOTAL; done = true; } } maybeRedrawText(now); }
+      if (variant === "terminal") { if (!done) { typed += 4.4 * options.typeSpeed; if (typed >= total) { typed = total; done = true; } } maybeRedrawText(now); }
       else if (now - lastTextAt >= style.redrawMs || textDirty) { CRT_SCREENS[variant](textContext, width, height, seconds); lastTextAt = now; textDirty = true; }
       if (textDirty) uploadTexture();
       gl.useProgram(program); gl.uniform1f(uTime, seconds); gl.uniform1f(uMotion, options.motion); gl.drawArrays(gl.TRIANGLES, 0, 3);
