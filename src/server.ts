@@ -35,6 +35,11 @@ function broadcast(msg: Message) {
 }
 
 const app = new Hono();
+app.use("*", async (c, next) => {
+  const start = Date.now();
+  await next();
+  console.log(`[API] ${c.req.method} ${c.req.path} → ${c.res.status} (${Date.now() - start}ms)`);
+});
 app.use("/api/*", cors({ origin: ORIGINS, allowMethods: ["GET", "POST"] }));
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
@@ -76,13 +81,16 @@ app.get(
   upgradeWebSocket(() => ({
     onOpen(_evt, ws) {
       sockets.add(ws);
+      console.log(`[WS] connected (active: ${sockets.size})`);
       ws.send(JSON.stringify({ type: "history", messages: db.history(GUEST_ROOM) }));
     },
     onClose(_evt, ws) {
       sockets.delete(ws);
+      console.log(`[WS] disconnected (active: ${sockets.size})`);
     },
-    onError(_evt, ws) {
+    onError(evt, ws) {
       sockets.delete(ws);
+      console.error(`[WS] error (active: ${sockets.size})`, evt);
     },
   })),
 );
