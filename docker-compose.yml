@@ -2,7 +2,7 @@ services:
   chat:
     build: .
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3001:3000"
     volumes:
       - chat-data:/data
     environment:

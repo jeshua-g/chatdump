@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import "../src/shaders/threeui.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

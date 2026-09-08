@@ -16,6 +16,15 @@
     "plugins": [{ "name": "next" }],
     "paths": { "@/*": ["./*"] }
   },
-  "include": ["next-env.d.ts", "app/**/*.ts", "app/**/*.tsx", "components/**/*.tsx", "next.config.ts", ".next/types/**/*.ts"],
-  "exclude": ["node_modules", "src"]
+  "include": [
+    "next-env.d.ts",
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "components/**/*.tsx",
+    "src/shaders/**/*.ts",
+    "src/shaders/**/*.tsx",
+    "next.config.ts",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": ["node_modules", "src/server.ts", "src/db.ts", "src/check.ts"]
 }
