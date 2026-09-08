@@ -10,6 +10,7 @@ function envInt(name: string, fallback: number) {
 const GUEST_LIMIT = envInt("GUEST_LIMIT", 50);
 const GUEST_WINDOW_MS = envInt("GUEST_WINDOW_MIN", 30) * 60 * 1000;
 const GUEST_TTL_MS = envInt("GUEST_TTL_HOURS", 24) * 60 * 60 * 1000;
+const GUEST_COOLDOWN_MS = envInt("GUEST_COOLDOWN_SEC", 2) * 1000;
 
 export type Message = {
   id: string;
@@ -35,9 +36,15 @@ export function openDb(dataDir: string) {
     CREATE TABLE IF NOT EXISTS guest_limits (
       ip TEXT PRIMARY KEY,
       count INTEGER NOT NULL,
-      window_start INTEGER NOT NULL
+      window_start INTEGER NOT NULL,
+      last_sent INTEGER NOT NULL DEFAULT 0
     );
   `);
+  try {
+    db.exec(`ALTER TABLE guest_limits ADD COLUMN last_sent INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    /* already on this schema */
+  }
 
   const insertMsg = db.prepare(
     `INSERT INTO messages (id, room_id, sender, body, created_at)
@@ -49,11 +56,11 @@ export function openDb(dataDir: string) {
      ORDER BY created_at DESC LIMIT 100`,
   );
   const getLimit = db.prepare(
-    `SELECT count, window_start FROM guest_limits WHERE ip = ?`,
+    `SELECT count, window_start, last_sent FROM guest_limits WHERE ip = ?`,
   );
   const upsertLimit = db.prepare(
-    `INSERT INTO guest_limits (ip, count, window_start) VALUES (?, ?, ?)
-     ON CONFLICT(ip) DO UPDATE SET count = excluded.count, window_start = excluded.window_start`,
+    `INSERT INTO guest_limits (ip, count, window_start, last_sent) VALUES (?, ?, ?, ?)
+     ON CONFLICT(ip) DO UPDATE SET count = excluded.count, window_start = excluded.window_start, last_sent = excluded.last_sent`,
   );
   const expireGuest = db.prepare(
     `DELETE FROM messages WHERE room_id = ? AND created_at < ?`,
@@ -87,8 +94,13 @@ export function openDb(dataDir: string) {
     },
 
     /** @returns remaining sends in this window, or 0 if blocked */
-    consumeGuest(ip: string, now = Date.now()): { ok: true; left: number } | { ok: false; retryAfterMs: number } {
-      const row = getLimit.get(ip) as { count: number; window_start: number } | undefined;
+    consumeGuest(ip: string, now = Date.now()):
+      | { ok: true; left: number }
+      | { ok: false; retryAfterMs: number; reason: "cooldown" | "limit" } {
+      const row = getLimit.get(ip) as { count: number; window_start: number; last_sent: number } | undefined;
+      if (row && now - row.last_sent < GUEST_COOLDOWN_MS) {
+        return { ok: false, retryAfterMs: GUEST_COOLDOWN_MS - (now - row.last_sent), reason: "cooldown" };
+      }
       let count = 0;
       let windowStart = now;
       if (row && now - row.window_start < GUEST_WINDOW_MS) {
@@ -96,13 +108,13 @@ export function openDb(dataDir: string) {
         windowStart = row.window_start;
       }
       if (count >= GUEST_LIMIT) {
-        return { ok: false, retryAfterMs: GUEST_WINDOW_MS - (now - windowStart) };
+        return { ok: false, retryAfterMs: GUEST_WINDOW_MS - (now - windowStart), reason: "limit" };
       }
-      upsertLimit.run(ip, count + 1, windowStart);
+      upsertLimit.run(ip, count + 1, windowStart, now);
       return { ok: true, left: GUEST_LIMIT - count - 1 };
     },
   };
 }
 
 export const GUEST_ROOM = "guest";
-export { GUEST_LIMIT, GUEST_WINDOW_MS, GUEST_TTL_MS };
+export { GUEST_LIMIT, GUEST_WINDOW_MS, GUEST_TTL_MS, GUEST_COOLDOWN_MS };
