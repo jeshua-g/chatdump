@@ -1,0 +1,9 @@
+node_modules
+dist
+out
+.next
+server.mjs
+data
+.env
+*.db
+.DS_Store
