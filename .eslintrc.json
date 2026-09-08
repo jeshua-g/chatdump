@@ -1,0 +1,4 @@
+{
+  "extends": "next/core-web-vitals",
+  "ignorePatterns": ["src/shaders/threeui.css", "out", ".next"]
+}

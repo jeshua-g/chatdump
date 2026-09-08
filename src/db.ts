@@ -66,9 +66,7 @@ export function openDb(dataDir: string) {
     `INSERT INTO guest_limits (ip, count, window_start, last_sent) VALUES (?, ?, ?, ?)
      ON CONFLICT(ip) DO UPDATE SET count = excluded.count, window_start = excluded.window_start, last_sent = excluded.last_sent`,
   );
-  const expireGuest = db.prepare(
-    `DELETE FROM messages WHERE room_id = ? AND created_at < ?`,
-  );
+  const expireGuest = db.prepare(`DELETE FROM messages WHERE room_id = ? AND created_at < ?`);
   let lastPrune = 0;
   const PRUNE_INTERVAL_MS = 5 * 60 * 1000;
   const pruneGuestIfNeeded = (now = Date.now()) => {
@@ -102,12 +100,20 @@ export function openDb(dataDir: string) {
     },
 
     /** @returns remaining sends in this window, or 0 if blocked */
-    consumeGuest(ip: string, now = Date.now()):
+    consumeGuest(
+      ip: string,
+      now = Date.now(),
+    ):
       | { ok: true; left: number }
       | { ok: false; retryAfterMs: number; reason: "cooldown" | "limit" } {
-      const row = getLimit.get(ip) as { count: number; window_start: number; last_sent: number } | undefined;
+      const row = getLimit.get(ip) as
+        { count: number; window_start: number; last_sent: number } | undefined;
       if (row && now - row.last_sent < GUEST_COOLDOWN_MS) {
-        return { ok: false, retryAfterMs: GUEST_COOLDOWN_MS - (now - row.last_sent), reason: "cooldown" };
+        return {
+          ok: false,
+          retryAfterMs: GUEST_COOLDOWN_MS - (now - row.last_sent),
+          reason: "cooldown",
+        };
       }
       let count = 0;
       let windowStart = now;

@@ -1,6 +1,7 @@
 :root {
   color-scheme: dark;
-  font-family: "ThreeUI Fragment Mono", ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-family:
+    "ThreeUI Fragment Mono", ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
 * {

@@ -19,7 +19,13 @@ if (blocked.ok) throw new Error("limit did not trip");
 const after = db.consumeGuest(ip, 1_000 + 30 * 60 * 1000);
 if (!after.ok) throw new Error("window did not reset");
 const now = Date.now();
-db.add({ id: "old", roomId: GUEST_ROOM, sender: "a", body: "gone", createdAt: now - GUEST_TTL_MS - 1 });
+db.add({
+  id: "old",
+  roomId: GUEST_ROOM,
+  sender: "a",
+  body: "gone",
+  createdAt: now - GUEST_TTL_MS - 1,
+});
 db.add({ id: "new", roomId: GUEST_ROOM, sender: "a", body: "kept", createdAt: now });
 const ids = db.history(GUEST_ROOM).map((m) => m.id);
 if (ids.includes("old")) throw new Error("expired guest message stayed");

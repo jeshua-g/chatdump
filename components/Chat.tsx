@@ -26,8 +26,42 @@ function wsUrl() {
   return `${proto}//${u.host}/ws`;
 }
 
-const ADJ = ["Amber", "Copper", "Quiet", "Warm", "Pale", "Dim", "Soft", "Late", "Rust", "Moss", "Pine", "Ash", "Faint", "Cold", "Dull", "Slow"];
-const NOUN = ["Moth", "Wren", "Maple", "Fern", "Fox", "Kite", "Reed", "Lark", "Birch", "Crow", "Thorn", "Finch", "Hare", "Tern", "Rook", "Vine"];
+const ADJ = [
+  "Amber",
+  "Copper",
+  "Quiet",
+  "Warm",
+  "Pale",
+  "Dim",
+  "Soft",
+  "Late",
+  "Rust",
+  "Moss",
+  "Pine",
+  "Ash",
+  "Faint",
+  "Cold",
+  "Dull",
+  "Slow",
+];
+const NOUN = [
+  "Moth",
+  "Wren",
+  "Maple",
+  "Fern",
+  "Fox",
+  "Kite",
+  "Reed",
+  "Lark",
+  "Birch",
+  "Crow",
+  "Thorn",
+  "Finch",
+  "Hare",
+  "Tern",
+  "Rook",
+  "Vine",
+];
 
 function guestName() {
   return `${ADJ[(Math.random() * ADJ.length) | 0]} ${NOUN[(Math.random() * NOUN.length) | 0]}`;
@@ -74,8 +108,7 @@ export function Chat() {
       };
       ws.onmessage = (ev) => {
         const data = JSON.parse(String(ev.data)) as
-          | { type: "history"; messages: Message[] }
-          | { type: "message"; message: Message };
+          { type: "history"; messages: Message[] } | { type: "message"; message: Message };
         if (data.type === "history") push(data.messages);
         else push([data.message]);
       };
@@ -117,13 +150,13 @@ export function Chat() {
       <div className="shader-frame">
         <CrtBackground
           variant="terminal"
-          speed={1.00}
-          typeSpeed={1.00}
-          motion={1.00}
+          speed={1.0}
+          typeSpeed={1.0}
+          motion={1.0}
           hue={0}
-          saturation={1.00}
-          brightness={1.00}
-          opacity={1.00}
+          saturation={1.0}
+          brightness={1.0}
+          opacity={1.0}
           messages={messages}
           live={live}
           joined={Boolean(nick)}
