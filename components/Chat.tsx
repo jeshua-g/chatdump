@@ -105,7 +105,8 @@ export function Chat() {
         setHint(err.error ?? "send failed");
         setText(body);
       }
-    } catch {
+    } catch (err) {
+      console.error("[API] /api/messages failed:", err);
       setHint("server offline");
       setText(body);
     }
