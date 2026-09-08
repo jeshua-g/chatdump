@@ -111,7 +111,7 @@ export function Chat() {
   }
 
   return (
-    <div className="app">
+    <div className="shell">
       <div className="shader-frame">
         <CrtBackground
           variant="terminal"
@@ -125,6 +125,7 @@ export function Chat() {
           messages={messages}
         />
       </div>
+      <div className="app">
       <header>
         <div>
           <p className="kicker">guest room</p>
@@ -134,16 +135,10 @@ export function Chat() {
           {live ? "live" : "offline"}
         </p>
       </header>
-      <ol className="log" ref={logRef} aria-live="polite">
+      <ol className="sr-only" aria-live="polite">
         {messages.map((msg) => (
           <li key={msg.id}>
-            <div className="who">
-              {msg.sender}{" "}
-              <span className="when">
-                {new Date(msg.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </span>
-            </div>
-            <p>{msg.body}</p>
+            {msg.sender}: {msg.body}
           </li>
         ))}
       </ol>
@@ -176,6 +171,7 @@ export function Chat() {
         </form>
       )}
       {hint ? <p className="hint">{hint}</p> : null}
+      </div>
     </div>
   );
 }

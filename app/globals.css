@@ -20,10 +20,16 @@ body {
   color: var(--ink);
 }
 
+.shell {
+  position: relative;
+  height: 100%;
+}
+
 .shader-frame {
   position: fixed;
   inset: 0;
   z-index: 0;
+  pointer-events: none;
 }
 
 .shader-frame .threeui-background {
@@ -77,36 +83,16 @@ h1 {
   color: #8df0b4;
 }
 
-.log {
-  list-style: none;
-  margin: 0;
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
   padding: 0;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-}
-
-.log li {
-  display: grid;
-  gap: 0.15rem;
-}
-
-.log .who {
-  font-size: 0.75rem;
-  color: #8df0b4;
-}
-
-.log .when {
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.log p {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.4;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 form {
