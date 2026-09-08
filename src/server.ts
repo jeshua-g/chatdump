@@ -3,7 +3,7 @@ import { createNodeWebSocket } from "@hono/node-ws";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { join } from "node:path";
-import { GUEST_ROOM, openDb, type Message } from "./db.ts";
+import { GUEST_LIMIT, GUEST_ROOM, GUEST_TTL_MS, GUEST_WINDOW_MS, openDb, type Message } from "./db.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), "data");
@@ -97,4 +97,4 @@ app.get(
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: "0.0.0.0" });
 injectWebSocket(server);
-console.log(`api on :${PORT}  data=${DATA_DIR}`);
+console.log(`api on :${PORT}  data=${DATA_DIR}  guest=${GUEST_LIMIT}/${GUEST_WINDOW_MS / 60000}min  ttl=${GUEST_TTL_MS / 3600000}h`);

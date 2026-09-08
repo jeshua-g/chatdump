@@ -2,9 +2,14 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-const GUEST_LIMIT = 50;
-const GUEST_WINDOW_MS = 30 * 60 * 1000;
-const GUEST_TTL_MS = 24 * 60 * 60 * 1000;
+function envInt(name: string, fallback: number) {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+const GUEST_LIMIT = envInt("GUEST_LIMIT", 50);
+const GUEST_WINDOW_MS = envInt("GUEST_WINDOW_MIN", 30) * 60 * 1000;
+const GUEST_TTL_MS = envInt("GUEST_TTL_HOURS", 24) * 60 * 60 * 1000;
 
 export type Message = {
   id: string;
