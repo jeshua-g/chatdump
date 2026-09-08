@@ -14,5 +14,15 @@ services:
       interval: 15s
       timeout: 3s
       retries: 5
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /etc/cloudflared:/etc/cloudflared:ro
+      - /home/jeshua/.cloudflared:/home/jeshua/.cloudflared:ro
+    command: tunnel --config /etc/cloudflared/chat-api.yml run bcd37932-d11f-44d5-a9a6-1557a9961943
+
 volumes:
   chat-data:
