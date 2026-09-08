@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 const GUEST_LIMIT = 50;
 const GUEST_WINDOW_MS = 30 * 60 * 1000;
+const GUEST_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type Message = {
   id: string;
@@ -49,9 +50,16 @@ export function openDb(dataDir: string) {
     `INSERT INTO guest_limits (ip, count, window_start) VALUES (?, ?, ?)
      ON CONFLICT(ip) DO UPDATE SET count = excluded.count, window_start = excluded.window_start`,
   );
+  const expireGuest = db.prepare(
+    `DELETE FROM messages WHERE room_id = ? AND created_at < ?`,
+  );
+  const pruneGuest = (now = Date.now()) => {
+    expireGuest.run(GUEST_ROOM, now - GUEST_TTL_MS);
+  };
 
   return {
     history(roomId: string): Message[] {
+      pruneGuest();
       const rows = listMsg.all(roomId) as {
         id: string;
         room_id: string;
@@ -70,6 +78,7 @@ export function openDb(dataDir: string) {
 
     add(msg: Message) {
       insertMsg.run(msg.id, msg.roomId, msg.sender, msg.body, msg.createdAt);
+      if (msg.roomId === GUEST_ROOM) pruneGuest(msg.createdAt);
     },
 
     /** @returns remaining sends in this window, or 0 if blocked */
@@ -91,4 +100,4 @@ export function openDb(dataDir: string) {
 }
 
 export const GUEST_ROOM = "guest";
-export { GUEST_LIMIT, GUEST_WINDOW_MS };
+export { GUEST_LIMIT, GUEST_WINDOW_MS, GUEST_TTL_MS };
