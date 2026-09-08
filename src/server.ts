@@ -48,17 +48,22 @@ app.get("/api/health", (c) => c.json({ ok: true, origin: "vps" }));
 app.get("/api/messages", (c) => c.json({ messages: db.history(GUEST_ROOM) }));
 
 app.post("/api/messages", async (c) => {
+  const start = performance.now();
   let body: { sender?: string; body?: string };
   try {
     body = await c.req.json();
   } catch {
     return c.json({ error: "invalid json" }, 400);
   }
+  console.log(`[API] JSON parsed: ${(performance.now() - start).toFixed(1)}ms`);
+
   const sender = (body.sender ?? "").trim().slice(0, 24);
   const text = (body.body ?? "").trim().slice(0, 2000);
   if (!sender || !text) return c.json({ error: "sender and body required" }, 400);
 
+  const quotaStart = performance.now();
   const quota = db.consumeGuest(clientIp(c));
+  console.log(`[API] quota: ${(performance.now() - quotaStart).toFixed(1)}ms`);
   if (!quota.ok) {
     const mins = Math.ceil(quota.retryAfterMs / 60000);
     return c.json({ error: `guest limit: wait ${mins} min`, retryAfterMs: quota.retryAfterMs }, 429);
@@ -71,8 +76,14 @@ app.post("/api/messages", async (c) => {
     body: text,
     createdAt: Date.now(),
   };
+  const dbStart = performance.now();
   db.add(msg);
+  console.log(`[API] db.add: ${(performance.now() - dbStart).toFixed(1)}ms`);
+
+  const broadcastStart = performance.now();
   broadcast(msg);
+  console.log(`[API] broadcast: ${(performance.now() - broadcastStart).toFixed(1)}ms`);
+  console.log(`[API] total: ${(performance.now() - start).toFixed(1)}ms`);
   return c.json({ message: msg, left: quota.left }, 201);
 });
 
