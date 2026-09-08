@@ -1,6 +1,5 @@
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
-import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { join } from "node:path";
@@ -8,6 +7,9 @@ import { GUEST_ROOM, openDb, type Message } from "./db.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), "data");
+const ORIGINS = (process.env.CORS_ORIGIN ?? "https://chat.jdump.com,http://localhost:5173,http://127.0.0.1:5173")
+  .split(",")
+  .map((s) => s.trim());
 const db = openDb(DATA_DIR);
 
 const sockets = new Set<{ send: (data: string) => void }>();
@@ -33,7 +35,7 @@ function broadcast(msg: Message) {
 }
 
 const app = new Hono();
-app.use("/api/*", cors());
+app.use("/api/*", cors({ origin: ORIGINS, allowMethods: ["GET", "POST"] }));
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
 app.get("/api/health", (c) => c.json({ ok: true, origin: "vps" }));
@@ -85,9 +87,6 @@ app.get(
   })),
 );
 
-app.use("/*", serveStatic({ root: "./out" }));
-app.get("*", serveStatic({ path: "./out/index.html" }));
-
 const server = serve({ fetch: app.fetch, port: PORT, hostname: "0.0.0.0" });
 injectWebSocket(server);
-console.log(`chat on :${PORT}  data=${DATA_DIR}`);
+console.log(`api on :${PORT}  data=${DATA_DIR}`);

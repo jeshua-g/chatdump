@@ -10,14 +10,19 @@ type Message = {
   createdAt: number;
 };
 
+function apiBase() {
+  if (process.env.NODE_ENV === "development") return "http://127.0.0.1:3000";
+  return process.env.NEXT_PUBLIC_API_URL ?? "https://chat-api.jdump.com";
+}
+
 function apiUrl(path: string) {
-  return process.env.NODE_ENV === "development" ? `http://127.0.0.1:3000${path}` : path;
+  return `${apiBase()}${path}`;
 }
 
 function wsUrl() {
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const host = process.env.NODE_ENV === "development" ? `${location.hostname}:3000` : location.host;
-  return `${proto}//${host}/ws`;
+  const u = new URL(apiBase());
+  const proto = u.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${u.host}/ws`;
 }
 
 export function Chat() {
@@ -92,14 +97,19 @@ export function Chat() {
     if (!body || !nick) return;
     setText("");
     setHint("");
-    const res = await fetch(apiUrl("/api/messages"), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sender: nick, body }),
-    });
-    if (!res.ok) {
-      const err = (await res.json().catch(() => ({}))) as { error?: string };
-      setHint(err.error ?? "send failed");
+    try {
+      const res = await fetch(apiUrl("/api/messages"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sender: nick, body }),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        setHint(err.error ?? "send failed");
+        setText(body);
+      }
+    } catch {
+      setHint("server offline");
       setText(body);
     }
   }

@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "concurrently -k \"node --watch --experimental-strip-types src/server.ts\" \"next dev --port 5173\"",
     "build": "next build && esbuild src/server.ts --bundle --platform=node --format=esm --outfile=server.mjs --packages=external",
+    "build:web": "next build",
+    "build:api": "esbuild src/server.ts --bundle --platform=node --format=esm --outfile=server.mjs --packages=external",
     "start": "node server.mjs",
     "check": "node --experimental-strip-types src/check.ts"
   },
