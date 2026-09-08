@@ -8,53 +8,68 @@ export const CRT_DEFAULTS: CrtOptions = { variant: "terminal", speed: 1, typeSpe
 export const crtStyle = (variant: CrtVariant): CrtStyle => CRT_STYLES[variant] ?? CRT_STYLES.terminal;
 type Segment = { t: string; c: "p" | "d" | "a" | "h" };
 const segment = (text: string, color: Segment["c"] = "p"): Segment => ({ t: text, c: color });
-const WRAP = 56;
-const MIN_ROWS = 19;
 const CRT_FONT = `"ThreeUI Fragment Mono", ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace`;
-function wrapBody(text: string) {
+function colsFor(cssWidth: number) {
+  if (cssWidth < 480) return 28;
+  if (cssWidth < 720) return 40;
+  return 56;
+}
+function rowsFor(cssWidth: number) {
+  if (cssWidth < 480) return 13;
+  if (cssWidth < 720) return 16;
+  return 19;
+}
+function wrapBody(text: string, wrap: number) {
   const out: string[] = [];
   for (const para of text.replace(/\s+/g, " ").trim().split("\n")) {
     let rest = para;
     if (!rest) { out.push(""); continue; }
-    while (rest.length > WRAP) {
-      out.push(rest.slice(0, WRAP));
-      rest = rest.slice(WRAP);
+    while (rest.length > wrap) {
+      out.push(rest.slice(0, wrap));
+      rest = rest.slice(wrap);
     }
     out.push(rest);
   }
   return out.length ? out : [""];
 }
-function messageRows(messages: CrtChatLine[]): Segment[][] {
+function messageRows(messages: CrtChatLine[], wrap: number): Segment[][] {
   const rows: Segment[][] = [];
   for (const msg of messages) {
-    const parts = wrapBody(msg.body.slice(0, 400));
-    rows.push([segment(msg.sender.slice(0, 24), "a"), segment("  ", "d"), segment(parts[0], "p")]);
-    for (const extra of parts.slice(1)) rows.push([segment(extra, "p")]);
+    const name = msg.sender.slice(0, 16);
+    const body = msg.body.slice(0, 400);
+    if (wrap < 40) {
+      rows.push([segment(name, "a")]);
+      for (const extra of wrapBody(body, wrap)) rows.push([segment(extra, "p")]);
+    } else {
+      const room = Math.max(8, wrap - name.length - 2);
+      rows.push([segment(name, "a"), segment("  ", "d"), segment(body.slice(0, room), "p")]);
+      for (const extra of wrapBody(body.slice(room), wrap)) rows.push([segment(extra, "p")]);
+    }
     rows.push([]);
   }
   return rows;
 }
-function promptRows(prefix: string, value: string, prefixColor: Segment["c"]): Segment[][] {
-  if (prefix.length + value.length <= WRAP) return [[segment(prefix, prefixColor), segment(value, "p")]];
-  const room = Math.max(1, WRAP - prefix.length);
+function promptRows(prefix: string, value: string, prefixColor: Segment["c"], wrap: number): Segment[][] {
+  if (prefix.length + value.length <= wrap) return [[segment(prefix, prefixColor), segment(value, "p")]];
+  const room = Math.max(1, wrap - prefix.length);
   const rows: Segment[][] = [[segment(prefix, prefixColor), segment(value.slice(0, room), "p")]];
-  for (const extra of wrapBody(value.slice(room))) rows.push([segment(extra, "p")]);
+  for (const extra of wrapBody(value.slice(room), wrap)) rows.push([segment(extra, "p")]);
   return rows;
 }
-function buildScreen(options: CrtOptions): Segment[][] {
+function buildScreen(options: CrtOptions, wrap: number, minRows: number): Segment[][] {
   const right = options.live ? "live" : "offline";
-  const gap = Math.max(2, WRAP - "GUEST ROOM".length - right.length);
+  const gap = Math.max(2, wrap - "GUEST ROOM".length - right.length);
   const header: Segment[][] = [
     [segment("GUEST ROOM", "d"), segment(" ".repeat(gap), "d"), segment(right, options.live ? "p" : "a")],
     [segment("chat.jdump", "h")],
     [],
   ];
-  let body = messageRows(options.messages ?? []);
+  let body = messageRows(options.messages ?? [], wrap);
   if (!body.length && !options.live) body = [[segment("no carrier", "d")]];
   const footer: Segment[][] = [];
-  if (options.hint) footer.push([segment(options.hint.slice(0, WRAP), "a")]);
-  footer.push(...promptRows(options.joined ? `${(options.nick || "anon").slice(0, 16)}> ` : "nick> ", options.joined ? options.draft : options.nick, options.joined ? "a" : "d"));
-  const room = Math.max(MIN_ROWS - header.length - footer.length, 4);
+  if (options.hint) footer.push([segment(options.hint.slice(0, wrap), "a")]);
+  footer.push(...promptRows(options.joined ? `${(options.nick || "anon").slice(0, 16)}> ` : "nick> ", options.joined ? options.draft : options.nick, options.joined ? "a" : "d", wrap));
+  const room = Math.max(minRows - header.length - footer.length, 4);
   const shown = body.slice(-room);
   return [...header, ...shown, ...Array(Math.max(0, room - shown.length)).fill([]), ...footer];
 }
@@ -72,12 +87,12 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
   const uniform = (name: string) => gl.getUniformLocation(program, name);
   const uTexture = uniform("uTex"), uResolution = uniform("uRes"), uTime = uniform("uTime"), uMotion = uniform("uMotion"), uCurve = uniform("uCurve"), uScan = uniform("uScan"), uScanDepth = uniform("uScanDepth"), uTriad = uniform("uTriad"), uGrille = uniform("uGrille"), uChroma = uniform("uChroma"), uBar = uniform("uBar"), uFlicker = uniform("uFlicker"), uGrain = uniform("uGrain"), uNoise = uniform("uNoise"), uVignette = uniform("uVignette"), uMono = uniform("uMono"), uGain = uniform("uGain"), uHalo = uniform("uHalo"), uSheen = uniform("uSheen"), uRoom = uniform("uRoom");
   const texture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, texture); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); gl.uniform1i(uTexture, 0);
-  let width = 1, height = 1, cssWidth = 1, cssHeight = 1, fontSize = 14, lineHeight = 20, startY = 0, charWidth = 8, caretX = 0, caretY = 0, typed = 0, done = true, textDirty = true, lastTextAt = 0, lastReveal = -1, lastBlink = -1, variant: CrtVariant = "terminal", style = crtStyle(variant), log = buildScreen(CRT_DEFAULTS), total = 0, maxChars = 1, feedSig = ""; const startedAt = performance.now();
-  const measure = () => { total = log.reduce((n, line) => n + lineLength(line), 0); maxChars = Math.max(WRAP, ...log.map(lineLength)); };
+  let width = 1, height = 1, cssWidth = 1, cssHeight = 1, fontSize = 14, lineHeight = 20, startY = 0, charWidth = 8, caretX = 0, caretY = 0, typed = 0, done = true, textDirty = true, lastTextAt = 0, lastReveal = -1, lastBlink = -1, variant: CrtVariant = "terminal", style = crtStyle(variant), cols = 56, minRows = 19, log = buildScreen(CRT_DEFAULTS, 56, 19), total = 0, maxChars = 1, feedSig = ""; const startedAt = performance.now();
+  const measure = () => { total = log.reduce((n, line) => n + lineLength(line), 0); maxChars = Math.max(cols, ...log.map(lineLength)); };
   const syncFeed = (options: CrtOptions) => {
-    const sig = `${(options.messages ?? []).map((m) => m.id).join("\n")}\0${options.live}\0${options.joined}\0${options.nick}\0${options.draft}\0${options.hint}`;
+    const sig = `${(options.messages ?? []).map((m) => m.id).join("\n")}\0${options.live}\0${options.joined}\0${options.nick}\0${options.draft}\0${options.hint}\0${cols}`;
     if (sig === feedSig) return;
-    log = buildScreen(options);
+    log = buildScreen(options, cols, minRows);
     measure();
     feedSig = sig;
     typed = total;
@@ -88,9 +103,37 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
     lastTextAt = 0;
     textDirty = true;
   };
-  const applyStyle = () => { gl.useProgram(program); gl.uniform2f(uCurve, style.curve[0], style.curve[1]); gl.uniform1f(uScanDepth, style.scanDepth); gl.uniform1f(uGrille, style.grille); gl.uniform1f(uChroma, style.chroma); gl.uniform1f(uBar, style.bar); gl.uniform1f(uFlicker, style.flicker); gl.uniform1f(uGrain, style.grain); gl.uniform1f(uNoise, style.noise); gl.uniform1f(uVignette, style.vignette); gl.uniform1f(uMono, style.mono); gl.uniform1f(uGain, style.gain); gl.uniform1f(uHalo, style.halo); gl.uniform3f(uSheen, style.sheen[0], style.sheen[1], style.sheen[2]); gl.uniform3f(uRoom, style.room[0], style.room[1], style.room[2]); const filter = style.filtering === "nearest" ? gl.NEAREST : gl.LINEAR; gl.bindTexture(gl.TEXTURE_2D, texture); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter); };
-  const layout = () => { startY = height * 0.135; lineHeight = height * 0.74 / Math.max(log.length, MIN_ROWS); fontSize = Math.max(5, Math.min(lineHeight * 0.8, width * 0.88 / (Math.max(maxChars, 1) * 0.62))); textContext.font = `600 ${fontSize.toFixed(2)}px ${CRT_FONT}`; charWidth = textContext.measureText("M").width || fontSize * 0.6; };
-  const setStyle = (key: Segment["c"], glow: boolean) => { const color = COLORS[key]; textContext.fillStyle = color.fill; textContext.shadowColor = glow ? color.glow : "transparent"; textContext.shadowBlur = glow ? fontSize * 0.38 : 0; };
+  const applyStyle = () => {
+    const t = Math.max(0, Math.min(1, (cssWidth - 400) / 500));
+    gl.useProgram(program);
+    gl.uniform2f(uCurve, style.curve[0] * (0.4 + 0.6 * t), style.curve[1] * (0.4 + 0.6 * t));
+    gl.uniform1f(uScanDepth, style.scanDepth * (0.4 + 0.6 * t));
+    gl.uniform1f(uGrille, style.grille * (0.2 + 0.8 * t));
+    gl.uniform1f(uChroma, style.chroma * (0.2 + 0.8 * t));
+    gl.uniform1f(uBar, style.bar);
+    gl.uniform1f(uFlicker, style.flicker * (0.5 + 0.5 * t));
+    gl.uniform1f(uGrain, style.grain);
+    gl.uniform1f(uNoise, style.noise);
+    gl.uniform1f(uVignette, style.vignette * (0.7 + 0.3 * t));
+    gl.uniform1f(uMono, style.mono);
+    gl.uniform1f(uGain, style.gain);
+    gl.uniform1f(uHalo, style.halo * (0.3 + 0.7 * t));
+    gl.uniform3f(uSheen, style.sheen[0], style.sheen[1], style.sheen[2]);
+    gl.uniform3f(uRoom, style.room[0], style.room[1], style.room[2]);
+    const filter = style.filtering === "nearest" ? gl.NEAREST : gl.LINEAR;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  };
+  const layout = () => {
+    startY = height * (cssWidth < 480 ? 0.10 : 0.135);
+    lineHeight = height * (cssWidth < 480 ? 0.80 : 0.74) / Math.max(log.length, minRows);
+    const minPx = (cssWidth < 480 ? 15 : cssWidth < 720 ? 13 : 8) * (width / cssWidth);
+    fontSize = Math.max(minPx, Math.min(lineHeight * 0.82, width * 0.90 / (Math.max(maxChars, 1) * 0.62)));
+    textContext.font = `600 ${fontSize.toFixed(2)}px ${CRT_FONT}`;
+    charWidth = textContext.measureText("M").width || fontSize * 0.6;
+  };
+  const setStyle = (key: Segment["c"], glow: boolean) => { const color = COLORS[key]; textContext.fillStyle = color.fill; textContext.shadowColor = glow ? color.glow : "transparent"; textContext.shadowBlur = glow ? fontSize * (cssWidth < 480 ? 0.16 : 0.38) : 0; };
   /* two passes per glyph: a soft phosphor halo, then the same glyph re-filled with
      the shadow off so the stroke core stays crisp at any backing resolution */
   const drawScreen = (reveal: number) => { textContext.setTransform(1, 0, 0, 1, 0, 0); textContext.fillStyle = "#03100a"; textContext.fillRect(0, 0, width, height); textContext.textAlign = "left"; textContext.textBaseline = "top"; textContext.font = `600 ${fontSize.toFixed(2)}px ${CRT_FONT}`; let remaining = reveal, y = startY; caretX = Math.floor((width - maxChars * charWidth) / 2); caretY = startY;
@@ -98,11 +141,13 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
   };
   const drawCursor = () => { textContext.shadowColor = COLORS.p.glow; textContext.shadowBlur = fontSize * 0.42; textContext.fillStyle = "#bdf8d2"; textContext.fillRect(caretX, caretY + fontSize * 0.06, Math.max(charWidth * 0.92, 4), fontSize * 0.96); textContext.shadowBlur = 0; textContext.fillRect(caretX, caretY + fontSize * 0.06, Math.max(charWidth * 0.92, 4), fontSize * 0.96); };
   const uploadTexture = () => { gl.bindTexture(gl.TEXTURE_2D, texture); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); textDirty = false; };
-  const resize = () => { const bounds = host.getBoundingClientRect(); cssWidth = Math.max(1, bounds.width); cssHeight = Math.max(1, bounds.height); const density = Math.min(typeof window === "undefined" ? 1 : window.devicePixelRatio || 1, 2); let nextWidth = Math.max(MIN_BUFFER_WIDTH, Math.round(Math.min(cssWidth * density, MAX_BUFFER_WIDTH))), nextHeight = Math.max(1, Math.round(nextWidth * cssHeight / cssWidth)); if (nextWidth * nextHeight > MAX_BUFFER_PIXELS) { const fit = Math.sqrt(MAX_BUFFER_PIXELS / (nextWidth * nextHeight)); nextWidth = Math.round(nextWidth * fit); nextHeight = Math.round(nextHeight * fit); }
+  const resize = () => { const bounds = host.getBoundingClientRect(); cssWidth = Math.max(1, bounds.width); cssHeight = Math.max(1, bounds.height); const nextCols = colsFor(cssWidth), nextMinRows = rowsFor(cssWidth); if (nextCols !== cols || nextMinRows !== minRows) { cols = nextCols; minRows = nextMinRows; feedSig = ""; } const density = Math.min(typeof window === "undefined" ? 1 : window.devicePixelRatio || 1, 2); let nextWidth = Math.max(MIN_BUFFER_WIDTH, Math.round(Math.min(cssWidth * density, MAX_BUFFER_WIDTH))), nextHeight = Math.max(1, Math.round(nextWidth * cssHeight / cssWidth)); if (nextWidth * nextHeight > MAX_BUFFER_PIXELS) { const fit = Math.sqrt(MAX_BUFFER_PIXELS / (nextWidth * nextHeight)); nextWidth = Math.round(nextWidth * fit); nextHeight = Math.round(nextHeight * fit); }
     const surface = style.surface, screenWidth = surface.mode === "fixed" ? surface.width : surface.mode === "cap" ? Math.min(nextWidth, surface.width) : nextWidth, screenHeight = surface.mode === "fixed" ? surface.height : Math.max(1, Math.round(screenWidth * nextHeight / nextWidth));
     if (canvas.width !== nextWidth || canvas.height !== nextHeight) { canvas.width = nextWidth; canvas.height = nextHeight; }
-    if (textCanvas.width !== screenWidth || textCanvas.height !== screenHeight) { textCanvas.width = screenWidth; textCanvas.height = screenHeight; width = screenWidth; height = screenHeight; layout(); lastReveal = -1; lastBlink = -1; lastTextAt = 0; textDirty = true; }
-    gl.useProgram(program); gl.viewport(0, 0, nextWidth, nextHeight); gl.uniform2f(uResolution, nextWidth, nextHeight); gl.uniform1f(uScan, Math.max(120, Math.min(cssHeight * style.scanDensity, 900))); gl.uniform1f(uTriad, Math.max(2, style.triadCss * nextWidth / cssWidth)); };
+    if (textCanvas.width !== screenWidth || textCanvas.height !== screenHeight) { textCanvas.width = screenWidth; textCanvas.height = screenHeight; width = screenWidth; height = screenHeight; }
+    layout(); lastReveal = -1; lastBlink = -1; lastTextAt = 0; textDirty = true;
+    applyStyle();
+    gl.useProgram(program); gl.viewport(0, 0, nextWidth, nextHeight); gl.uniform2f(uResolution, nextWidth, nextHeight); gl.uniform1f(uScan, Math.max(120, Math.min(cssHeight * style.scanDensity, 900))); gl.uniform1f(uTriad, Math.max(2, style.triadCss * (cssWidth < 480 ? 1.6 : 1) * nextWidth / cssWidth)); };
   const maybeRedrawText = (now: number) => { const reveal = done ? Infinity : Math.floor(typed), blink = Math.floor((now - startedAt) / 420) % 2 === 0 ? 1 : 0, due = !done ? now - lastTextAt > 42 : blink !== lastBlink; if (reveal === lastReveal && blink === lastBlink && !due) return; if (!done && now - lastTextAt <= 42 && reveal === lastReveal && blink === lastBlink) return; drawScreen(reveal); if (blink) drawCursor(); lastTextAt = now; lastReveal = reveal; lastBlink = blink; textDirty = true; };
   applyStyle();
   if (typeof document !== "undefined") document.fonts.ready.then(() => { lastReveal = -1; lastBlink = -1; textDirty = true; });

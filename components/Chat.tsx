@@ -26,9 +26,15 @@ function wsUrl() {
   return `${proto}//${u.host}/ws`;
 }
 
+const ADJ = ["Amber", "Copper", "Quiet", "Warm", "Pale", "Dim", "Soft", "Late", "Rust", "Moss", "Pine", "Ash", "Faint", "Cold", "Dull", "Slow"];
+const NOUN = ["Moth", "Wren", "Maple", "Fern", "Fox", "Kite", "Reed", "Lark", "Birch", "Crow", "Thorn", "Finch", "Hare", "Tern", "Rook", "Vine"];
+
+function guestName() {
+  return `${ADJ[(Math.random() * ADJ.length) | 0]} ${NOUN[(Math.random() * NOUN.length) | 0]}`;
+}
+
 export function Chat() {
   const [nick, setNick] = useState("");
-  const [joined, setJoined] = useState(false);
   const [text, setText] = useState("");
   const [hint, setHint] = useState("");
   const [live, setLive] = useState(false);
@@ -37,7 +43,10 @@ export function Chat() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setNick(localStorage.getItem("nick") ?? "");
+    const stored = localStorage.getItem("guest-name");
+    const name = stored && stored.length <= 24 ? stored : guestName();
+    localStorage.setItem("guest-name", name);
+    setNick(name);
   }, []);
 
   useEffect(() => {
@@ -79,15 +88,6 @@ export function Chat() {
     };
   }, []);
 
-  function join(e: FormEvent) {
-    e.preventDefault();
-    const name = nick.trim();
-    if (!name) return;
-    localStorage.setItem("nick", name);
-    setNick(name);
-    setJoined(true);
-  }
-
   async function send(e: FormEvent) {
     e.preventDefault();
     const body = text.trim();
@@ -125,7 +125,7 @@ export function Chat() {
           opacity={1.00}
           messages={messages}
           live={live}
-          joined={joined}
+          joined={Boolean(nick)}
           nick={nick}
           draft={text}
           hint={hint}
@@ -138,14 +138,14 @@ export function Chat() {
           </li>
         ))}
       </ol>
-      <form className="ghost" onSubmit={joined ? send : join}>
+      <form className="ghost" onSubmit={send}>
         <input
           ref={inputRef}
-          value={joined ? text : nick}
-          onChange={(e) => (joined ? setText(e.target.value) : setNick(e.target.value))}
-          maxLength={joined ? 2000 : 24}
-          autoComplete={joined ? "off" : "nickname"}
-          aria-label={joined ? "Message" : "Nickname"}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          maxLength={2000}
+          autoComplete="off"
+          aria-label="Message"
           required
           autoFocus
         />
