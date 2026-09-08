@@ -24,6 +24,10 @@ export function openDb(dataDir: string) {
   mkdirSync(dataDir, { recursive: true });
   const db = new DatabaseSync(join(dataDir, "chat.db"));
   db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+  `);
+  db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       room_id TEXT NOT NULL,
@@ -65,13 +69,17 @@ export function openDb(dataDir: string) {
   const expireGuest = db.prepare(
     `DELETE FROM messages WHERE room_id = ? AND created_at < ?`,
   );
-  const pruneGuest = (now = Date.now()) => {
+  let lastPrune = 0;
+  const PRUNE_INTERVAL_MS = 5 * 60 * 1000;
+  const pruneGuestIfNeeded = (now = Date.now()) => {
+    if (now - lastPrune < PRUNE_INTERVAL_MS) return;
+    lastPrune = now;
     expireGuest.run(GUEST_ROOM, now - GUEST_TTL_MS);
   };
 
   return {
     history(roomId: string): Message[] {
-      pruneGuest();
+      pruneGuestIfNeeded();
       const rows = listMsg.all(roomId) as {
         id: string;
         room_id: string;
@@ -90,7 +98,7 @@ export function openDb(dataDir: string) {
 
     add(msg: Message) {
       insertMsg.run(msg.id, msg.roomId, msg.sender, msg.body, msg.createdAt);
-      if (msg.roomId === GUEST_ROOM) pruneGuest(msg.createdAt);
+      if (msg.roomId === GUEST_ROOM) pruneGuestIfNeeded(msg.createdAt);
     },
 
     /** @returns remaining sends in this window, or 0 if blocked */
