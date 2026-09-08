@@ -3,12 +3,14 @@ import { CRT_FRAGMENT_SHADER, CRT_VERTEX_SHADER } from "./crtShaders";
 
 export const CRT_VARIANTS = ["terminal", "cinematic", "blue-screen", "nintendo"] as const;
 export type CrtChatLine = { id: string; sender: string; body: string };
-export type CrtOptions = { variant: CrtVariant; speed: number; typeSpeed: number; motion: number; brightness: number; opacity: number; hue: number; saturation: number; messages: CrtChatLine[] };
-export const CRT_DEFAULTS: CrtOptions = { variant: "terminal", speed: 1, typeSpeed: 1, motion: 1, brightness: 1, opacity: 1, hue: 0, saturation: 1, messages: [] };
+export type CrtOptions = { variant: CrtVariant; speed: number; typeSpeed: number; motion: number; brightness: number; opacity: number; hue: number; saturation: number; messages: CrtChatLine[]; live: boolean; joined: boolean; nick: string; draft: string; hint: string };
+export const CRT_DEFAULTS: CrtOptions = { variant: "terminal", speed: 1, typeSpeed: 1, motion: 1, brightness: 1, opacity: 1, hue: 0, saturation: 1, messages: [], live: false, joined: false, nick: "", draft: "", hint: "" };
 export const crtStyle = (variant: CrtVariant): CrtStyle => CRT_STYLES[variant] ?? CRT_STYLES.terminal;
 type Segment = { t: string; c: "p" | "d" | "a" | "h" };
 const segment = (text: string, color: Segment["c"] = "p"): Segment => ({ t: text, c: color });
 const WRAP = 56;
+const MIN_ROWS = 19;
+const CRT_FONT = `"ThreeUI Fragment Mono", ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace`;
 function wrapBody(text: string) {
   const out: string[] = [];
   for (const para of text.replace(/\s+/g, " ").trim().split("\n")) {
@@ -22,8 +24,7 @@ function wrapBody(text: string) {
   }
   return out.length ? out : [""];
 }
-function chatLog(messages: CrtChatLine[]): Segment[][] {
-  if (!messages.length) return [[segment("")]];
+function messageRows(messages: CrtChatLine[]): Segment[][] {
   const rows: Segment[][] = [];
   for (const msg of messages) {
     const parts = wrapBody(msg.body.slice(0, 400));
@@ -32,6 +33,30 @@ function chatLog(messages: CrtChatLine[]): Segment[][] {
     rows.push([]);
   }
   return rows;
+}
+function promptRows(prefix: string, value: string, prefixColor: Segment["c"]): Segment[][] {
+  if (prefix.length + value.length <= WRAP) return [[segment(prefix, prefixColor), segment(value, "p")]];
+  const room = Math.max(1, WRAP - prefix.length);
+  const rows: Segment[][] = [[segment(prefix, prefixColor), segment(value.slice(0, room), "p")]];
+  for (const extra of wrapBody(value.slice(room))) rows.push([segment(extra, "p")]);
+  return rows;
+}
+function buildScreen(options: CrtOptions): Segment[][] {
+  const right = options.live ? "live" : "offline";
+  const gap = Math.max(2, WRAP - "GUEST ROOM".length - right.length);
+  const header: Segment[][] = [
+    [segment("GUEST ROOM", "d"), segment(" ".repeat(gap), "d"), segment(right, options.live ? "p" : "a")],
+    [segment("chat.jdump", "h")],
+    [],
+  ];
+  let body = messageRows(options.messages ?? []);
+  if (!body.length && !options.live) body = [[segment("no carrier", "d")]];
+  const footer: Segment[][] = [];
+  if (options.hint) footer.push([segment(options.hint.slice(0, WRAP), "a")]);
+  footer.push(...promptRows(options.joined ? `${(options.nick || "anon").slice(0, 16)}> ` : "nick> ", options.joined ? options.draft : options.nick, options.joined ? "a" : "d"));
+  const room = Math.max(MIN_ROWS - header.length - footer.length, 4);
+  const shown = body.slice(-room);
+  return [...header, ...shown, ...Array(Math.max(0, room - shown.length)).fill([]), ...footer];
 }
 const COLORS = { p: { fill: "#8df0b4", glow: "rgba(28,236,132,0.95)" }, d: { fill: "#4f9a76", glow: "rgba(28,236,132,0.45)" }, a: { fill: "#ffba5e", glow: "rgba(255,150,52,0.95)" }, h: { fill: "#eafff3", glow: "rgba(120,255,190,0.95)" } };
 const lineLength = (line: Segment[]) => line.reduce((total, item) => total + item.t.length, 0);
@@ -47,18 +72,16 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
   const uniform = (name: string) => gl.getUniformLocation(program, name);
   const uTexture = uniform("uTex"), uResolution = uniform("uRes"), uTime = uniform("uTime"), uMotion = uniform("uMotion"), uCurve = uniform("uCurve"), uScan = uniform("uScan"), uScanDepth = uniform("uScanDepth"), uTriad = uniform("uTriad"), uGrille = uniform("uGrille"), uChroma = uniform("uChroma"), uBar = uniform("uBar"), uFlicker = uniform("uFlicker"), uGrain = uniform("uGrain"), uNoise = uniform("uNoise"), uVignette = uniform("uVignette"), uMono = uniform("uMono"), uGain = uniform("uGain"), uHalo = uniform("uHalo"), uSheen = uniform("uSheen"), uRoom = uniform("uRoom");
   const texture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, texture); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); gl.uniform1i(uTexture, 0);
-  let width = 1, height = 1, cssWidth = 1, cssHeight = 1, fontSize = 14, lineHeight = 20, startY = 0, charWidth = 8, caretX = 0, caretY = 0, typed = 0, done = false, textDirty = true, lastTextAt = 0, lastReveal = -1, lastBlink = -1, variant: CrtVariant = "terminal", style = crtStyle(variant), log = chatLog([]), total = 0, maxChars = 1, feedSig = ""; const startedAt = performance.now();
-  const measure = () => { total = log.reduce((n, line) => n + lineLength(line), 0); maxChars = Math.max(1, ...log.map(lineLength)); };
-  const syncFeed = (messages: CrtChatLine[]) => {
-    const sig = messages.map((m) => m.id).join("\n");
+  let width = 1, height = 1, cssWidth = 1, cssHeight = 1, fontSize = 14, lineHeight = 20, startY = 0, charWidth = 8, caretX = 0, caretY = 0, typed = 0, done = true, textDirty = true, lastTextAt = 0, lastReveal = -1, lastBlink = -1, variant: CrtVariant = "terminal", style = crtStyle(variant), log = buildScreen(CRT_DEFAULTS), total = 0, maxChars = 1, feedSig = ""; const startedAt = performance.now();
+  const measure = () => { total = log.reduce((n, line) => n + lineLength(line), 0); maxChars = Math.max(WRAP, ...log.map(lineLength)); };
+  const syncFeed = (options: CrtOptions) => {
+    const sig = `${(options.messages ?? []).map((m) => m.id).join("\n")}\0${options.live}\0${options.joined}\0${options.nick}\0${options.draft}\0${options.hint}`;
     if (sig === feedSig) return;
-    const prevTotal = total;
-    log = chatLog(messages);
+    log = buildScreen(options);
     measure();
     feedSig = sig;
-    if (prevTotal === 0 && total > 0) { typed = total; done = true; }
-    else if (total > prevTotal) { typed = prevTotal; done = false; }
-    else { typed = total; done = true; }
+    typed = total;
+    done = true;
     layout();
     lastReveal = -1;
     lastBlink = -1;
@@ -66,11 +89,11 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
     textDirty = true;
   };
   const applyStyle = () => { gl.useProgram(program); gl.uniform2f(uCurve, style.curve[0], style.curve[1]); gl.uniform1f(uScanDepth, style.scanDepth); gl.uniform1f(uGrille, style.grille); gl.uniform1f(uChroma, style.chroma); gl.uniform1f(uBar, style.bar); gl.uniform1f(uFlicker, style.flicker); gl.uniform1f(uGrain, style.grain); gl.uniform1f(uNoise, style.noise); gl.uniform1f(uVignette, style.vignette); gl.uniform1f(uMono, style.mono); gl.uniform1f(uGain, style.gain); gl.uniform1f(uHalo, style.halo); gl.uniform3f(uSheen, style.sheen[0], style.sheen[1], style.sheen[2]); gl.uniform3f(uRoom, style.room[0], style.room[1], style.room[2]); const filter = style.filtering === "nearest" ? gl.NEAREST : gl.LINEAR; gl.bindTexture(gl.TEXTURE_2D, texture); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter); };
-  const layout = () => { startY = height * 0.135; lineHeight = height * 0.74 / Math.max(log.length, 1); fontSize = Math.max(5, Math.min(lineHeight * 0.8, width * 0.88 / (Math.max(maxChars, 1) * 0.62))); textContext.font = `600 ${fontSize.toFixed(2)}px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace`; charWidth = textContext.measureText("M").width || fontSize * 0.6; };
+  const layout = () => { startY = height * 0.135; lineHeight = height * 0.74 / Math.max(log.length, MIN_ROWS); fontSize = Math.max(5, Math.min(lineHeight * 0.8, width * 0.88 / (Math.max(maxChars, 1) * 0.62))); textContext.font = `600 ${fontSize.toFixed(2)}px ${CRT_FONT}`; charWidth = textContext.measureText("M").width || fontSize * 0.6; };
   const setStyle = (key: Segment["c"], glow: boolean) => { const color = COLORS[key]; textContext.fillStyle = color.fill; textContext.shadowColor = glow ? color.glow : "transparent"; textContext.shadowBlur = glow ? fontSize * 0.38 : 0; };
   /* two passes per glyph: a soft phosphor halo, then the same glyph re-filled with
      the shadow off so the stroke core stays crisp at any backing resolution */
-  const drawScreen = (reveal: number) => { textContext.setTransform(1, 0, 0, 1, 0, 0); textContext.fillStyle = "#03100a"; textContext.fillRect(0, 0, width, height); textContext.textAlign = "left"; textContext.textBaseline = "top"; textContext.font = `600 ${fontSize.toFixed(2)}px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace`; let remaining = reveal, y = startY; caretX = Math.floor((width - maxChars * charWidth) / 2); caretY = startY;
+  const drawScreen = (reveal: number) => { textContext.setTransform(1, 0, 0, 1, 0, 0); textContext.fillStyle = "#03100a"; textContext.fillRect(0, 0, width, height); textContext.textAlign = "left"; textContext.textBaseline = "top"; textContext.font = `600 ${fontSize.toFixed(2)}px ${CRT_FONT}`; let remaining = reveal, y = startY; caretX = Math.floor((width - maxChars * charWidth) / 2); caretY = startY;
     for (const line of log) { const length = lineLength(line), visible = reveal === Infinity ? Infinity : Math.min(remaining, length); let x = Math.floor((width - maxChars * charWidth) / 2), drawn = 0; for (const item of line) { let text = item.t; if (visible !== Infinity) { const left = visible - drawn; if (left <= 0) break; if (left < text.length) text = text.slice(0, left); } if (text.length) { setStyle(item.c, true); textContext.fillText(text, x, y); setStyle(item.c, false); textContext.fillText(text, x, y); x += charWidth * text.length; } drawn += item.t.length; if (visible !== Infinity && drawn >= visible) break; } caretX = x; caretY = y; if (visible !== Infinity) remaining -= visible; y += lineHeight; if (visible !== Infinity && remaining <= 0) break; }
   };
   const drawCursor = () => { textContext.shadowColor = COLORS.p.glow; textContext.shadowBlur = fontSize * 0.42; textContext.fillStyle = "#bdf8d2"; textContext.fillRect(caretX, caretY + fontSize * 0.06, Math.max(charWidth * 0.92, 4), fontSize * 0.96); textContext.shadowBlur = 0; textContext.fillRect(caretX, caretY + fontSize * 0.06, Math.max(charWidth * 0.92, 4), fontSize * 0.96); };
@@ -82,12 +105,13 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
     gl.useProgram(program); gl.viewport(0, 0, nextWidth, nextHeight); gl.uniform2f(uResolution, nextWidth, nextHeight); gl.uniform1f(uScan, Math.max(120, Math.min(cssHeight * style.scanDensity, 900))); gl.uniform1f(uTriad, Math.max(2, style.triadCss * nextWidth / cssWidth)); };
   const maybeRedrawText = (now: number) => { const reveal = done ? Infinity : Math.floor(typed), blink = Math.floor((now - startedAt) / 420) % 2 === 0 ? 1 : 0, due = !done ? now - lastTextAt > 42 : blink !== lastBlink; if (reveal === lastReveal && blink === lastBlink && !due) return; if (!done && now - lastTextAt <= 42 && reveal === lastReveal && blink === lastBlink) return; drawScreen(reveal); if (blink) drawCursor(); lastTextAt = now; lastReveal = reveal; lastBlink = blink; textDirty = true; };
   applyStyle();
+  if (typeof document !== "undefined") document.fonts.ready.then(() => { lastReveal = -1; lastBlink = -1; textDirty = true; });
   return {
     resize,
     render(now: number) {
       const options = getOptions(), requested = CRT_STYLES[options.variant] ? options.variant : "terminal";
       if (requested !== variant) { variant = requested; style = crtStyle(variant); applyStyle(); typed = 0; done = false; lastReveal = -1; lastBlink = -1; lastTextAt = 0; resize(); }
-      if (variant === "terminal") syncFeed(options.messages ?? []);
+      if (variant === "terminal") syncFeed(options);
       const seconds = (now - startedAt) * 0.001 * options.speed;
       if (variant === "terminal") { if (!done) { typed += 4.4 * options.typeSpeed; if (typed >= total) { typed = total; done = true; } } maybeRedrawText(now); }
       else if (now - lastTextAt >= style.redrawMs || textDirty) { CRT_SCREENS[variant](textContext, width, height, seconds); lastTextAt = now; textDirty = true; }

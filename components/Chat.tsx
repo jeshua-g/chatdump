@@ -34,6 +34,7 @@ export function Chat() {
   const [live, setLive] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const seen = useRef(new Set<string>());
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setNick(localStorage.getItem("nick") ?? "");
@@ -111,7 +112,7 @@ export function Chat() {
   }
 
   return (
-    <div className="shell">
+    <div className="shell" onPointerDown={() => inputRef.current?.focus()}>
       <div className="shader-frame">
         <CrtBackground
           variant="terminal"
@@ -123,18 +124,13 @@ export function Chat() {
           brightness={1.00}
           opacity={1.00}
           messages={messages}
+          live={live}
+          joined={joined}
+          nick={nick}
+          draft={text}
+          hint={hint}
         />
       </div>
-      <div className="app">
-      <header>
-        <div>
-          <p className="kicker">guest room</p>
-          <h1>chat.jdump</h1>
-        </div>
-        <p className="status" data-state={live ? "on" : "off"}>
-          {live ? "live" : "offline"}
-        </p>
-      </header>
       <ol className="sr-only" aria-live="polite">
         {messages.map((msg) => (
           <li key={msg.id}>
@@ -142,36 +138,18 @@ export function Chat() {
           </li>
         ))}
       </ol>
-      {!joined ? (
-        <form onSubmit={join}>
-          <label>
-            Nickname
-            <input
-              value={nick}
-              onChange={(e) => setNick(e.target.value)}
-              maxLength={24}
-              autoComplete="nickname"
-              required
-            />
-          </label>
-          <button type="submit">Join</button>
-        </form>
-      ) : (
-        <form className="compose" onSubmit={send}>
-          <input
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            maxLength={2000}
-            autoComplete="off"
-            placeholder="Message"
-            required
-            autoFocus
-          />
-          <button type="submit">Send</button>
-        </form>
-      )}
-      {hint ? <p className="hint">{hint}</p> : null}
-      </div>
+      <form className="ghost" onSubmit={joined ? send : join}>
+        <input
+          ref={inputRef}
+          value={joined ? text : nick}
+          onChange={(e) => (joined ? setText(e.target.value) : setNick(e.target.value))}
+          maxLength={joined ? 2000 : 24}
+          autoComplete={joined ? "off" : "nickname"}
+          aria-label={joined ? "Message" : "Nickname"}
+          required
+          autoFocus
+        />
+      </form>
     </div>
   );
 }
