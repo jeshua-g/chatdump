@@ -25,14 +25,5 @@ services:
       timeout: 3s
       retries: 5
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    network_mode: host
-    volumes:
-      - /etc/cloudflared/chat-api.yml:/etc/cloudflared/chat-api.yml:ro
-      - /etc/cloudflared/chat-api-credentials.json:/etc/cloudflared/chat-api-credentials.json:ro
-    command: tunnel --config /etc/cloudflared/chat-api.yml run
-
 volumes:
   chat-data:
