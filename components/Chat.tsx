@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { authClient } from "@/lib/auth-client";
 import { CrtBackground } from "@/src/shaders/crt/CrtBackground";
 
 type Message = {
@@ -67,6 +68,13 @@ function guestName() {
   return `${ADJ[(Math.random() * ADJ.length) | 0]} ${NOUN[(Math.random() * NOUN.length) | 0]}`;
 }
 
+function loadGuestName() {
+  const stored = localStorage.getItem("guest-name");
+  const name = stored && stored.length <= 24 ? stored : guestName();
+  localStorage.setItem("guest-name", name);
+  return name;
+}
+
 export function Chat() {
   const [nick, setNick] = useState("");
   const [text, setText] = useState("");
@@ -77,10 +85,20 @@ export function Chat() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const stored = localStorage.getItem("guest-name");
-    const name = stored && stored.length <= 24 ? stored : guestName();
-    localStorage.setItem("guest-name", name);
-    setNick(name);
+    let stop = false;
+    authClient.getSession().then(({ data }) => {
+      if (stop) return;
+      const name = data?.user.name?.trim();
+      if (name) {
+        setNick(name.slice(0, 24));
+        return;
+      }
+      setNick(loadGuestName());
+      setHint("/login github   /login google");
+    });
+    return () => {
+      stop = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -127,9 +145,25 @@ export function Chat() {
     if (!body || !nick) return;
     setText("");
     setHint("");
+    if (body === "/login github" || body === "/login google") {
+      const provider = body === "/login github" ? "github" : "google";
+      const { error } = await authClient.signIn.social({
+        provider,
+        callbackURL: location.origin,
+      });
+      if (error) setHint(error.message ?? "login failed");
+      return;
+    }
+    if (body === "/logout") {
+      await authClient.signOut();
+      setNick(loadGuestName());
+      setHint("signed out");
+      return;
+    }
     try {
       const res = await fetch(apiUrl("/api/messages"), {
         method: "POST",
+        credentials: "include",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ sender: nick, body }),
       });

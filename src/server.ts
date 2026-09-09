@@ -1,8 +1,10 @@
 import { serve } from "@hono/node-server";
 import { createNodeWebSocket } from "@hono/node-ws";
+import { getMigrations } from "better-auth/db/migration";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { join } from "node:path";
+import { auth } from "./auth.ts";
 import {
   GUEST_COOLDOWN_MS,
   GUEST_LIMIT,
@@ -50,7 +52,16 @@ app.use("*", async (c, next) => {
   await next();
   console.log(`[API] ${c.req.method} ${c.req.path} → ${c.res.status} (${Date.now() - start}ms)`);
 });
-app.use("/api/*", cors({ origin: ORIGINS, allowMethods: ["GET", "POST"] }));
+app.use(
+  "/api/*",
+  cors({
+    origin: ORIGINS,
+    allowMethods: ["GET", "POST", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+  }),
+);
+app.all("/api/auth/*", (c) => auth.handler(c.req.raw));
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
 app.get("/api/health", (c) => c.json({ ok: true, origin: "vps" }));
@@ -67,22 +78,27 @@ app.post("/api/messages", async (c) => {
   }
   console.log(`[API] JSON parsed: ${(performance.now() - start).toFixed(1)}ms`);
 
-  const sender = (body.sender ?? "").trim().slice(0, 24);
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  const sender = (session?.user.name || body.sender || "").trim().slice(0, 24);
   const text = (body.body ?? "").trim().slice(0, 2000);
   if (!sender || !text) return c.json({ error: "sender and body required" }, 400);
 
-  const quotaStart = performance.now();
-  const quota = db.consumeGuest(clientIp(c));
-  console.log(`[API] quota: ${(performance.now() - quotaStart).toFixed(1)}ms`);
-  if (!quota.ok) {
-    if (quota.reason === "cooldown") {
-      return c.json({ error: "slow down", retryAfterMs: quota.retryAfterMs }, 429);
+  let left = -1;
+  if (!session) {
+    const quotaStart = performance.now();
+    const quota = db.consumeGuest(clientIp(c));
+    console.log(`[API] quota: ${(performance.now() - quotaStart).toFixed(1)}ms`);
+    if (!quota.ok) {
+      if (quota.reason === "cooldown") {
+        return c.json({ error: "slow down", retryAfterMs: quota.retryAfterMs }, 429);
+      }
+      const mins = Math.ceil(quota.retryAfterMs / 60000);
+      return c.json(
+        { error: `guest limit: wait ${mins} min`, retryAfterMs: quota.retryAfterMs },
+        429,
+      );
     }
-    const mins = Math.ceil(quota.retryAfterMs / 60000);
-    return c.json(
-      { error: `guest limit: wait ${mins} min`, retryAfterMs: quota.retryAfterMs },
-      429,
-    );
+    left = quota.left;
   }
 
   const msg: Message = {
@@ -100,7 +116,7 @@ app.post("/api/messages", async (c) => {
   broadcast(msg);
   console.log(`[API] broadcast: ${(performance.now() - broadcastStart).toFixed(1)}ms`);
   console.log(`[API] total: ${(performance.now() - start).toFixed(1)}ms`);
-  return c.json({ message: msg, left: quota.left }, 201);
+  return c.json({ message: msg, left }, 201);
 });
 
 app.get(
@@ -122,6 +138,8 @@ app.get(
   })),
 );
 
+const { runMigrations } = await getMigrations(auth.options);
+await runMigrations();
 const server = serve({ fetch: app.fetch, port: PORT, hostname: "0.0.0.0" });
 injectWebSocket(server);
 console.log(

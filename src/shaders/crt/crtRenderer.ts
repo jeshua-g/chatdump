@@ -68,7 +68,7 @@ function buildScreen(options: CrtOptions, wrap: number, minRows: number): Segmen
   if (!body.length && !options.live) body = [[segment("no carrier", "d")]];
   const footer: Segment[][] = [];
   if (options.hint) footer.push([segment(options.hint.slice(0, wrap), "a")]);
-  footer.push(...promptRows(options.joined ? `${(options.nick || "anon").slice(0, 16)}> ` : "nick> ", options.joined ? options.draft : options.nick, options.joined ? "a" : "d", wrap));
+  footer.push(...promptRows(options.joined ? `${(options.nick || "anon").slice(0, 16)}@chat:~$ ` : "nick@chat:~$ ", options.joined ? options.draft : options.nick, options.joined ? "a" : "d", wrap));
   const room = Math.max(minRows - header.length - footer.length, 4);
   const shown = body.slice(-room);
   return [...header, ...shown, ...Array(Math.max(0, room - shown.length)).fill([]), ...footer];
