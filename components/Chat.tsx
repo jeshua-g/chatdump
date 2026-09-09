@@ -635,26 +635,34 @@ export function Chat() {
       return;
     }
     if (cmd === "whoami") {
-      let id = meIdRef.current;
-      let root = adminRef.current;
-      if (signedRef.current) {
-        try {
-          const res = await fetch(apiUrl("/api/me"), { credentials: "include" });
-          if (res.ok) {
-            const me = (await res.json()) as { nick?: string; admin?: boolean; id?: string };
-            id = me.id ?? id;
-            root = Boolean(me.admin);
-            meIdRef.current = id;
-            adminRef.current = root;
-          }
-        } catch {
-          /* keep cached */
+      let id = "";
+      let root = false;
+      let signed = false;
+      try {
+        const res = await fetch(apiUrl("/api/me"), { credentials: "include" });
+        if (res.ok) {
+          const me = (await res.json()) as { nick?: string; admin?: boolean; id?: string };
+          signed = true;
+          id = me.id ?? "";
+          root = Boolean(me.admin);
+          meIdRef.current = id;
+          adminRef.current = root;
+          signedRef.current = true;
+          setSignedIn(true);
+          if (me.nick) setNick(me.nick.slice(0, 24));
+        } else {
+          meIdRef.current = "";
+          adminRef.current = false;
+          signedRef.current = false;
+          setSignedIn(false);
         }
+      } catch {
+        /* server offline — fall through as guest */
       }
       sys(
-        `${echo}\nnick  ${nickRef.current}\nid    ${id || "(guest — sign in with /auth)"}${
-          root ? "\nuid=0(root)" : ""
-        }`,
+        `${echo}\nnick  ${nickRef.current}\nid    ${
+          signed && id ? id : "(guest — sign in with /auth)"
+        }${root ? "\nuid=0(root)" : ""}`,
       );
       return;
     }
