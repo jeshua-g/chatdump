@@ -1,31 +1,31 @@
 export const HELP = `# Rooms
-ls                  List rooms
-rooms               List rooms + info
-mkdir <room>        Create a room (signed in)
-mkdir <room> private  Private room
-inv <name>          Invite a user
-ssh user@room       Connect to a room
-exit                Leave the current room
-pwd                 Show current room
+/ls                 List rooms
+/rooms              List rooms + info
+/mkdir <room>       Create a room (signed in)
+/mkdir <room> private  Private room
+/inv <name>         Invite a user
+/ssh user@room      Connect to a room
+/exit               Leave the current room
+/pwd                Show current room
 
 # Identity / Account
-whoami              Show your nickname
-nick <name>         Change nickname
-auth                Login / manage authentication
-passwd              Change password
-logout              Log out
+/whoami             Show your nickname
+/nick <name>        Change nickname
+/auth               Login / manage authentication
+/passwd             Change password
+/logout             Log out
 
 # People
-who                 Show who's currently in the room
+/who                Show who's currently in the room
 
 # Chat
-clear               Clear terminal
-help                Show available commands
+/clear              Clear terminal
+/help               Show available commands
 
 # Voice
-voice               Join/leave room voice
-mute                Mute/unmute microphone
-deafen              Deafen/undeafen yourself`;
+/voice              Join/leave room voice
+/mute               Mute/unmute microphone
+/deafen             Deafen/undeafen yourself`;
 
 export function parseSsh(arg: string) {
   const at = arg.lastIndexOf("@");

@@ -14,27 +14,6 @@ type Message = {
   createdAt: number;
 };
 
-const CMDS = new Set([
-  "ls",
-  "rooms",
-  "mkdir",
-  "inv",
-  "ssh",
-  "exit",
-  "pwd",
-  "whoami",
-  "nick",
-  "auth",
-  "passwd",
-  "logout",
-  "who",
-  "clear",
-  "help",
-  "voice",
-  "mute",
-  "deafen",
-]);
-
 function apiBase() {
   if (process.env.NODE_ENV === "development") return "http://127.0.0.1:3000";
   return process.env.NEXT_PUBLIC_API_URL ?? "https://chat-api.jdump.com";
@@ -112,7 +91,7 @@ export function Chat() {
   const [nick, setNick] = useState("");
   const [signedIn, setSignedIn] = useState(false);
   const [text, setText] = useState("");
-  const [hint, setHint] = useState("type help");
+  const [hint, setHint] = useState("type /help");
   const [live, setLive] = useState(false);
   const [cwd, setCwd] = useState("~");
   const [promptKind, setPromptKind] = useState<"shell" | "select" | "password">("shell");
@@ -281,9 +260,13 @@ export function Chat() {
   }
 
   async function run(line: string) {
-    const [cmd, ...rest] = line.split(/\s+/);
-    const arg = rest.join(" ").trim();
     const echo = `${nickRef.current}@chat:${cwdRef.current}$ ${line}`;
+    if (!line.startsWith("/")) {
+      sys(`${echo}\ntry /help`);
+      return;
+    }
+    const [cmd, ...rest] = line.slice(1).split(/\s+/);
+    const arg = rest.join(" ").trim();
     if (cmd === "clear") {
       setFeed([]);
       return;
@@ -316,7 +299,7 @@ export function Chat() {
       const flag = rest[1] ?? "";
       const id = parseRoomId(name);
       if (!id || (flag && flag !== "private") || rest.length > 2) {
-        sys(`${echo}\nusage: mkdir <room> [private]`);
+        sys(`${echo}\nusage: /mkdir <room> [private]`);
         return;
       }
       if (flag === "private") {
@@ -338,7 +321,7 @@ export function Chat() {
         return;
       }
       if (!arg) {
-        sys(`${echo}\nusage: inv <name>`);
+        sys(`${echo}\nusage: /inv <name>`);
         return;
       }
       try {
@@ -392,7 +375,7 @@ export function Chat() {
       return;
     }
     if (cmd === "passwd") {
-      sys(`${echo}\nno password - use auth (Google / GitHub)`);
+      sys(`${echo}\nno password - use /auth (Google / GitHub)`);
       return;
     }
     if (cmd === "logout") {
@@ -414,7 +397,7 @@ export function Chat() {
     }
     if (cmd === "ssh") {
       if (!arg) {
-        sys(`${echo}\nusage: ssh user@room`);
+        sys(`${echo}\nusage: /ssh user@room`);
         return;
       }
       const { room } = parseSsh(arg);
@@ -454,7 +437,7 @@ export function Chat() {
       sys(`${echo}\nvoice is not online yet`);
       return;
     }
-    sys(`${echo}\n${cmd}: command not found`);
+    sys(`${echo}\n/${cmd}: command not found`);
   }
 
   async function send(e: FormEvent) {
@@ -510,8 +493,7 @@ export function Chat() {
         return;
       }
     }
-    const cmd = body.split(/\s+/)[0] ?? "";
-    if (CMDS.has(cmd) || !roomRef.current) {
+    if (body.startsWith("/") || !roomRef.current) {
       await run(body);
       return;
     }
