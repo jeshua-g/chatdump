@@ -28,23 +28,44 @@ export function CrtBackground({ className = "", ...props }: CrtBackgroundProps) 
         renderer.render(performance.now());
       },
       tick = (now: number) => {
-        renderer.render(now);
+        try {
+          renderer.render(now);
+        } catch {
+          frame = 0;
+          return;
+        }
         frame = visible && !document.hidden ? requestAnimationFrame(tick) : 0;
+      },
+      wake = () => {
+        if (document.hidden) return;
+        visible = true;
+        try {
+          renderer.resize();
+        } catch {
+          /* context may still be gone */
+        }
+        if (!frame) frame = requestAnimationFrame(tick);
       };
     const resizeObserver = new ResizeObserver(resize),
       intersection = new IntersectionObserver(([entry]) => {
         visible = entry?.isIntersecting ?? true;
-        if (visible && !frame) frame = requestAnimationFrame(tick);
-        if (!visible && frame) (cancelAnimationFrame(frame), (frame = 0));
+        if (visible) wake();
+        else if (frame) (cancelAnimationFrame(frame), (frame = 0));
       });
     resizeObserver.observe(host);
     intersection.observe(host);
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("pageshow", wake);
+    window.addEventListener("focus", wake);
     resize();
     frame = requestAnimationFrame(tick);
     return () => {
       if (frame) cancelAnimationFrame(frame);
       resizeObserver.disconnect();
       intersection.disconnect();
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("pageshow", wake);
+      window.removeEventListener("focus", wake);
       renderer.dispose();
     };
   }, []);

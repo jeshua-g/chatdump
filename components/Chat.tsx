@@ -295,8 +295,11 @@ export function Chat() {
     let stop = false;
     let timer: ReturnType<typeof setTimeout>;
     let ws: WebSocket | undefined;
+    let hidAt = 0;
     const connect = () => {
       if (stop) return;
+      clearTimeout(timer);
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
       ws = new WebSocket(wsUrl());
       wsRef.current = ws;
       ws.onopen = () => {
@@ -380,10 +383,31 @@ export function Chat() {
         setFeed((prev) => [...prev, { id: msg.id, sender: msg.sender, body: msg.body }]);
       };
     };
+    const wake = () => {
+      if (document.hidden) {
+        hidAt = Date.now();
+        return;
+      }
+      clearTimeout(timer);
+      const stale = hidAt && Date.now() - hidAt > 4000;
+      hidAt = 0;
+      if (stale && ws && ws.readyState === WebSocket.OPEN) ws.close();
+      if (!ws || ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+        connect();
+        return;
+      }
+      if (ws.readyState === WebSocket.OPEN && roomRef.current) {
+        ws.send(JSON.stringify(joinMsg(roomRef.current)));
+      }
+    };
     connect();
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("pageshow", wake);
     return () => {
       stop = true;
       clearTimeout(timer);
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("pageshow", wake);
       ws?.close();
     };
   }, []);
