@@ -24,7 +24,7 @@ const ORIGINS = (
   .map((s) => s.trim());
 const db = openDb(DATA_DIR);
 
-const sockets = new Map<{ send: (data: string) => void }, string | null>();
+const sockets = new Map<{ send: (data: string) => void }, { room: string | null; nick: string }>();
 
 function clientIp(c: { req: { header: (n: string) => string | undefined } }) {
   return (
@@ -37,8 +37,29 @@ function clientIp(c: { req: { header: (n: string) => string | undefined } }) {
 
 function broadcast(msg: Message) {
   const payload = JSON.stringify({ type: "message", message: msg });
-  for (const [ws, room] of sockets) {
-    if (room !== msg.roomId) continue;
+  for (const [ws, meta] of sockets) {
+    if (meta.room !== msg.roomId) continue;
+    try {
+      ws.send(payload);
+    } catch {
+      sockets.delete(ws);
+    }
+  }
+}
+
+function namesIn(room: string) {
+  const names: string[] = [];
+  for (const meta of sockets.values()) {
+    if (meta.room === room && meta.nick) names.push(meta.nick);
+  }
+  return [...new Set(names)];
+}
+
+function presence(room: string | null) {
+  if (!room) return;
+  const payload = JSON.stringify({ type: "presence", names: namesIn(room) });
+  for (const [ws, meta] of sockets) {
+    if (meta.room !== room) continue;
     try {
       ws.send(payload);
     } catch {
@@ -122,7 +143,35 @@ app.post("/api/rooms", async (c) => {
     if (made.reason === "invalid") return c.json({ error: "bad room name" }, 400);
     return c.json({ error: "file exists" }, 409);
   }
-  return c.json({ id: made.id, access }, 201);
+  return c.json({ id: made.id, access, token: made.token }, 201);
+});
+
+app.get("/api/my-rooms", async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) return c.json({ error: "unauthorized" }, 401);
+  return c.json({ rooms: db.listMine(session.user.id) });
+});
+
+app.post("/api/rooms/:id/delete", async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) return c.json({ error: "unauthorized" }, 401);
+  const result = db.deleteRoom(c.req.param("id").toLowerCase(), session.user.id);
+  if (!result.ok) {
+    if (result.reason === "missing") return c.json({ error: "no such room" }, 404);
+    return c.json({ error: "permission denied" }, 403);
+  }
+  return c.json({ ok: true });
+});
+
+app.get("/api/rooms/:id/link", async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) return c.json({ error: "unauthorized" }, 401);
+  const result = db.inviteLink(c.req.param("id").toLowerCase(), session.user.id);
+  if (!result.ok) {
+    if (result.reason === "not-invite") return c.json({ error: "not an invite room" }, 400);
+    return c.json({ error: "permission denied" }, 403);
+  }
+  return c.json({ token: result.token });
 });
 
 app.post("/api/rooms/:id/invite", async (c) => {
@@ -136,20 +185,22 @@ app.post("/api/rooms/:id/invite", async (c) => {
   }
   const nick = (body.nick ?? "").trim();
   if (!nick) return c.json({ error: "nick required" }, 400);
-  const result = db.invite(c.req.param("id").toLowerCase(), session.user.id, nick);
+  const id = c.req.param("id").toLowerCase();
+  const result = db.invite(id, session.user.id, nick);
   if (!result.ok) {
     if (result.reason === "nouser") return c.json({ error: "no such user" }, 404);
     if (result.reason === "not-invite") return c.json({ error: "not an invite room" }, 400);
     return c.json({ error: "permission denied" }, 403);
   }
-  return c.json({ ok: true });
+  const room = db.getRoom(id);
+  return c.json({ ok: true, token: room?.inviteToken || undefined });
 });
 
 app.get("/api/messages", (c) => c.json({ messages: db.history(GUEST_ROOM) }));
 
 app.post("/api/messages", async (c) => {
   const start = performance.now();
-  let body: { sender?: string; body?: string; room?: string; password?: string };
+  let body: { sender?: string; body?: string; room?: string; password?: string; token?: string };
   try {
     body = await c.req.json();
   } catch {
@@ -164,7 +215,7 @@ app.post("/api/messages", async (c) => {
   const text = (body.body ?? "").trim().slice(0, 2000);
   const roomId = (body.room ?? "").trim().toLowerCase();
   if (!sender || !text) return c.json({ error: "sender and body required" }, 400);
-  const enter = db.canEnter(roomId, session?.user.id ?? null, body.password);
+  const enter = db.canEnter(roomId, session?.user.id ?? null, body.password, body.token);
   if (!enter.ok) {
     if (enter.reason === "missing") return c.json({ error: "no such room" }, 404);
     return c.json({ error: "permission denied" }, 403);
@@ -212,29 +263,45 @@ app.get(
     const headers = c.req.raw.headers;
     return {
       onOpen(_evt, ws) {
-        sockets.set(ws, null);
+        sockets.set(ws, { room: null, nick: "" });
         console.log(`[WS] connected (active: ${sockets.size})`);
       },
       onMessage(evt, ws) {
         void (async () => {
-          let data: { type?: string; room?: string; password?: string };
+          let data: { type?: string; room?: string; password?: string; nick?: string; token?: string };
           try {
             data = JSON.parse(String(evt.data)) as {
               type?: string;
               room?: string;
               password?: string;
+              nick?: string;
+              token?: string;
             };
           } catch {
             return;
           }
           if (data.type === "leave") {
-            sockets.set(ws, null);
+            const prev = sockets.get(ws);
+            sockets.set(ws, { room: null, nick: prev?.nick ?? "" });
+            presence(prev?.room ?? null);
+            return;
+          }
+          if (data.type === "nick") {
+            const prev = sockets.get(ws) ?? { room: null, nick: "" };
+            prev.nick = (data.nick ?? "").trim().slice(0, 24);
+            sockets.set(ws, prev);
+            presence(prev.room);
+            return;
+          }
+          if (data.type === "who") {
+            const prev = sockets.get(ws);
+            ws.send(JSON.stringify({ type: "presence", names: prev?.room ? namesIn(prev.room) : [] }));
             return;
           }
           if (data.type !== "join") return;
           const room = (data.room ?? "").trim().toLowerCase();
           const session = await auth.api.getSession({ headers });
-          const enter = db.canEnter(room, session?.user.id ?? null, data.password);
+          const enter = db.canEnter(room, session?.user.id ?? null, data.password, data.token);
           if (!enter.ok) {
             if (enter.reason === "missing") {
               ws.send(
@@ -252,16 +319,24 @@ app.get(
             ws.send(JSON.stringify({ type: "error", error: "permission denied" }));
             return;
           }
-          sockets.set(ws, room);
+          const prev = sockets.get(ws);
+          const nick = (data.nick ?? prev?.nick ?? "").trim().slice(0, 24);
+          sockets.set(ws, { room, nick });
+          if (prev?.room && prev.room !== room) presence(prev.room);
           ws.send(JSON.stringify({ type: "history", messages: db.history(room) }));
+          presence(room);
         })();
       },
       onClose(_evt, ws) {
+        const prev = sockets.get(ws);
         sockets.delete(ws);
+        presence(prev?.room ?? null);
         console.log(`[WS] disconnected (active: ${sockets.size})`);
       },
       onError(evt, ws) {
+        const prev = sockets.get(ws);
         sockets.delete(ws);
+        presence(prev?.room ?? null);
         console.error(`[WS] error (active: ${sockets.size})`, evt);
       },
     };

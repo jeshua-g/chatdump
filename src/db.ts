@@ -69,7 +69,8 @@ export function openDb(dataDir: string) {
       owner_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       access TEXT NOT NULL DEFAULT 'public',
-      password_hash TEXT
+      password_hash TEXT,
+      invite_token TEXT
     );
     CREATE TABLE IF NOT EXISTS invites (
       room_id TEXT NOT NULL,
@@ -88,7 +89,7 @@ export function openDb(dataDir: string) {
     /* already on this schema */
   }
   try {
-    db.exec(`ALTER TABLE rooms ADD COLUMN password_hash TEXT`);
+    db.exec(`ALTER TABLE rooms ADD COLUMN invite_token TEXT`);
   } catch {
     /* already on this schema */
   }
@@ -115,10 +116,12 @@ export function openDb(dataDir: string) {
      ON CONFLICT(user_id) DO UPDATE SET nick = excluded.nick`,
   );
   const getRoomStmt = db.prepare(
-    `SELECT id, owner_id, access, COALESCE(password_hash, '') AS password_hash FROM rooms WHERE id = ?`,
+    `SELECT id, owner_id, access, COALESCE(password_hash, '') AS password_hash,
+            COALESCE(invite_token, '') AS invite_token FROM rooms WHERE id = ?`,
   );
   const insertRoom = db.prepare(
-    `INSERT INTO rooms (id, owner_id, created_at, access, password_hash) VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO rooms (id, owner_id, created_at, access, password_hash, invite_token)
+     VALUES (?, ?, ?, ?, ?, ?)`,
   );
   const listRoomsStmt = db.prepare(
     `SELECT r.id, r.access, COALESCE(n.nick, '') AS owner
@@ -128,6 +131,18 @@ export function openDb(dataDir: string) {
   const findNickStmt = db.prepare(`SELECT user_id FROM nicks WHERE nick = ?`);
   const isInvitedStmt = db.prepare(`SELECT 1 FROM invites WHERE room_id = ? AND user_id = ?`);
   const insertInvite = db.prepare(`INSERT OR IGNORE INTO invites (room_id, user_id) VALUES (?, ?)`);
+  const myRoomsStmt = db.prepare(
+    `SELECT r.id, r.access, 'owner' AS role
+     FROM rooms r WHERE r.owner_id = ?
+     UNION
+     SELECT r.id, r.access, 'invite' AS role
+     FROM rooms r JOIN invites i ON i.room_id = r.id WHERE i.user_id = ?
+     ORDER BY id`,
+  );
+  const deleteMsgs = db.prepare(`DELETE FROM messages WHERE room_id = ?`);
+  const deleteInvites = db.prepare(`DELETE FROM invites WHERE room_id = ?`);
+  const deleteRoomStmt = db.prepare(`DELETE FROM rooms WHERE id = ?`);
+  const setInviteToken = db.prepare(`UPDATE rooms SET invite_token = ? WHERE id = ?`);
   const expireGuest = db.prepare(`DELETE FROM messages WHERE room_id = ? AND created_at < ?`);
   let lastPrune = 0;
   const PRUNE_INTERVAL_MS = 5 * 60 * 1000;
@@ -176,16 +191,30 @@ export function openDb(dataDir: string) {
 
     getRoom(id: string) {
       if (id === GUEST_ROOM) {
-        return { id, ownerId: "", access: "public" as const, passwordHash: "" };
+        return { id, ownerId: "", access: "public" as const, passwordHash: "", inviteToken: "" };
       }
       const row = getRoomStmt.get(id) as
-        { id: string; owner_id: string; access: string; password_hash: string } | undefined;
+        | {
+            id: string;
+            owner_id: string;
+            access: string;
+            password_hash: string;
+            invite_token: string;
+          }
+        | undefined;
       if (!row) return null;
+      const access = (row.access || "public") as RoomAccess;
+      let inviteToken = row.invite_token;
+      if (access === "invite" && !inviteToken) {
+        inviteToken = randomBytes(16).toString("hex");
+        setInviteToken.run(inviteToken, row.id);
+      }
       return {
         id: row.id,
         ownerId: row.owner_id,
-        access: (row.access || "public") as RoomAccess,
+        access,
         passwordHash: row.password_hash,
+        inviteToken,
       };
     },
 
@@ -193,7 +222,7 @@ export function openDb(dataDir: string) {
       return listRoomsStmt.all() as { id: string; access: string; owner: string }[];
     },
 
-    canEnter(id: string, userId: string | null, password?: string) {
+    canEnter(id: string, userId: string | null, password?: string, token?: string) {
       const room = this.getRoom(id);
       if (!room) return { ok: false as const, reason: "missing" as const };
       if (room.access === "public") return { ok: true as const };
@@ -205,6 +234,7 @@ export function openDb(dataDir: string) {
         }
         return { ok: true as const };
       }
+      if (token && room.inviteToken && token === room.inviteToken) return { ok: true as const };
       if (userId && isInvitedStmt.get(id, userId)) return { ok: true as const };
       return { ok: false as const, reason: "denied" as const };
     },
@@ -217,8 +247,34 @@ export function openDb(dataDir: string) {
       if (id === GUEST_ROOM) return { ok: false as const, reason: "exists" as const };
       if (getRoomStmt.get(id)) return { ok: false as const, reason: "exists" as const };
       const hash = access === "password" && password ? hashPassword(password) : null;
-      insertRoom.run(id, ownerId, Date.now(), access, hash);
-      return { ok: true as const, id };
+      const token = access === "invite" ? randomBytes(16).toString("hex") : null;
+      insertRoom.run(id, ownerId, Date.now(), access, hash, token);
+      return { ok: true as const, id, token: token ?? undefined };
+    },
+
+    listMine(userId: string) {
+      return myRoomsStmt.all(userId, userId) as { id: string; access: string; role: string }[];
+    },
+
+    deleteRoom(id: string, actorId: string) {
+      if (id === GUEST_ROOM) return { ok: false as const, reason: "denied" as const };
+      const room = this.getRoom(id);
+      if (!room) return { ok: false as const, reason: "missing" as const };
+      if (room.ownerId !== actorId) return { ok: false as const, reason: "denied" as const };
+      deleteMsgs.run(id);
+      deleteInvites.run(id);
+      deleteRoomStmt.run(id);
+      return { ok: true as const };
+    },
+
+    inviteLink(roomId: string, actorId: string) {
+      const room = this.getRoom(roomId);
+      if (!room) return { ok: false as const, reason: "missing" as const };
+      if (room.ownerId !== actorId) return { ok: false as const, reason: "denied" as const };
+      if (room.access !== "invite" || !room.inviteToken) {
+        return { ok: false as const, reason: "not-invite" as const };
+      }
+      return { ok: true as const, token: room.inviteToken };
     },
 
     invite(roomId: string, actorId: string, nick: string) {

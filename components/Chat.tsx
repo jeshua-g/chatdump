@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { HELP, HELP_NARROW, authMenu, parseRoomId, parseSsh, privateMenu } from "@/lib/shell";
 import { CrtBackground } from "@/src/shaders/crt/CrtBackground";
@@ -16,6 +16,7 @@ type Message = {
 
 const NOISE =
   "https://res.cloudinary.com/qnt0vxiu/video/upload/v1788945215/freesound_community-analog-crt-tv-electronic-static-noise-60428_ywldmf.mp3";
+const MOTD = "chatdump\ntype /help  ·  /ssh guest";
 
 function apiBase() {
   if (process.env.NODE_ENV === "development") return "http://127.0.0.1:3000";
@@ -30,6 +31,50 @@ function wsUrl() {
   const u = new URL(apiBase());
   const proto = u.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${u.host}/ws`;
+}
+
+function inviteUrl(room: string, token: string) {
+  return `${location.origin}/?join=${encodeURIComponent(room)}&t=${encodeURIComponent(token)}`;
+}
+
+function mentioned(body: string, nick: string) {
+  const needle = `@${nick.toLowerCase()}`;
+  const hay = body.toLowerCase();
+  let from = 0;
+  while (from < hay.length) {
+    const i = hay.indexOf(needle, from);
+    if (i < 0) return false;
+    const after = i + needle.length;
+    if (after >= body.length || /\W/.test(body[after])) return true;
+    from = i + 1;
+  }
+  return false;
+}
+
+function beep() {
+  try {
+    const ctx = new AudioContext();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.frequency.value = 880;
+    g.gain.value = 0.06;
+    o.connect(g);
+    g.connect(ctx.destination);
+    o.start();
+    o.stop(ctx.currentTime + 0.09);
+    o.onended = () => void ctx.close();
+  } catch {
+    /* no audio */
+  }
+}
+
+function loadHist(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem("shell-hist") ?? "[]") as unknown;
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string").slice(-50) : [];
+  } catch {
+    return [];
+  }
 }
 
 const ADJ = [
@@ -105,6 +150,15 @@ export function Chat() {
   const pendingJoin = useRef<{ room: string; echo: string } | null>(null);
   const gateRef = useRef<Gate | null>(null);
   const passRef = useRef<Record<string, string>>({});
+  const tokenRef = useRef<Record<string, string>>({});
+  const presenceRef = useRef<string[]>([]);
+  const histRef = useRef<string[]>([]);
+  const histI = useRef(-1);
+  const stashRef = useRef("");
+  const mentionI = useRef(-1);
+  const urlJoin = useRef<{ room: string; token: string } | null>(null);
+  const hissOn = useRef(true);
+  const booted = useRef(false);
   const wsRef = useRef<WebSocket | undefined>(undefined);
   const nickRef = useRef("");
   const signedRef = useRef(false);
@@ -120,6 +174,66 @@ export function Chat() {
     sysN.current += 1;
     setFeed((prev) => [...prev, { id: `sys-${sysN.current}`, sender: "", body }]);
   }
+
+  function joinMsg(room: string) {
+    return {
+      type: "join",
+      room,
+      nick: nickRef.current,
+      password: passRef.current[room],
+      token: tokenRef.current[room],
+    };
+  }
+
+  function remember(line: string) {
+    if (!line || histRef.current[histRef.current.length - 1] === line) return;
+    histRef.current = [...histRef.current, line].slice(-50);
+    localStorage.setItem("shell-hist", JSON.stringify(histRef.current));
+  }
+
+  function tryUrlJoin() {
+    const j = urlJoin.current;
+    const ws = wsRef.current;
+    if (!j || !nickRef.current || !ws || ws.readyState !== WebSocket.OPEN) return;
+    urlJoin.current = null;
+    if (roomRef.current === j.room) return;
+    pendingJoin.current = { room: j.room, echo: `join ${j.room}` };
+    ws.send(JSON.stringify(joinMsg(j.room)));
+  }
+
+  function mentionMatches(value: string) {
+    const at = value.lastIndexOf("@");
+    if (at < 0) return [];
+    const prefix = value.slice(at + 1).toLowerCase();
+    if (prefix.includes(" ") && !presenceRef.current.some((n) => n.toLowerCase().startsWith(prefix))) {
+      return [];
+    }
+    return presenceRef.current.filter(
+      (n) => n !== nickRef.current && n.toLowerCase().startsWith(prefix),
+    );
+  }
+
+  function applyHint(value: string) {
+    const hits = mentionMatches(value);
+    if (value.includes("@") && hits.length) setHint(`tab: ${hits.join("  ")}`);
+    else if (!value) setHint("type /help");
+    else setHint("");
+  }
+
+  useEffect(() => {
+    if (booted.current) return;
+    booted.current = true;
+    histRef.current = loadHist();
+    hissOn.current = localStorage.getItem("crt-noise") !== "off";
+    const q = new URLSearchParams(location.search);
+    const room = parseRoomId(q.get("join") ?? "");
+    const token = q.get("t") ?? "";
+    if (room && token) {
+      tokenRef.current[room] = token;
+      urlJoin.current = { room, token };
+    }
+    sys(MOTD);
+  }, []);
 
   useEffect(() => {
     let stop = false;
@@ -155,14 +269,8 @@ export function Chat() {
       wsRef.current = ws;
       ws.onopen = () => {
         setLive(true);
-        if (roomRef.current)
-          ws?.send(
-            JSON.stringify({
-              type: "join",
-              room: roomRef.current,
-              password: passRef.current[roomRef.current],
-            }),
-          );
+        if (roomRef.current) ws?.send(JSON.stringify(joinMsg(roomRef.current)));
+        else tryUrlJoin();
       };
       ws.onclose = () => {
         setLive(false);
@@ -173,7 +281,12 @@ export function Chat() {
           | { type: "history"; messages: Message[] }
           | { type: "message"; message: Message }
           | { type: "error"; error: string }
-          | { type: "auth"; mode: string };
+          | { type: "auth"; mode: string }
+          | { type: "presence"; names: string[] };
+        if (data.type === "presence") {
+          presenceRef.current = data.names;
+          return;
+        }
         if (data.type === "auth") {
           const joining = pendingJoin.current;
           if (joining) {
@@ -208,6 +321,7 @@ export function Chat() {
         if (msg.roomId !== roomRef.current || seen.current.has(msg.id)) return;
         seen.current.add(msg.id);
         inbox.current.push(msg);
+        if (msg.sender !== nickRef.current && mentioned(msg.body, nickRef.current)) beep();
         setFeed((prev) => [...prev, { id: msg.id, sender: msg.sender, body: msg.body }]);
       };
     };
@@ -220,14 +334,20 @@ export function Chat() {
   }, []);
 
   useEffect(() => {
+    if (nick && wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "nick", nick }));
+    }
+    tryUrlJoin();
+  }, [live, nick]);
+
+  useEffect(() => {
     const el = noiseRef.current;
     if (!el) return;
-    el.volume = 1;
     const kick = () => {
-      void el.play().catch(() => {});
+      if (hissOn.current) void el.play().catch(() => {});
     };
     const vis = () => {
-      if (document.hidden) el.pause();
+      if (document.hidden || !hissOn.current) el.pause();
       else void el.play().catch(() => {});
     };
     window.addEventListener("pointerdown", kick);
@@ -254,6 +374,7 @@ export function Chat() {
       localStorage.setItem("guest-name", name);
     }
     setNick(name);
+    wsRef.current?.send(JSON.stringify({ type: "nick", nick: name }));
   }
 
   async function postRoom(
@@ -277,9 +398,12 @@ export function Chat() {
         sys(`${echo}\nmkdir: failed`);
         return;
       }
+      const made = (await res.json()) as { token?: string };
       const label =
         access === "public" ? id : `${id} (${access === "password" ? "password" : "invite"})`;
-      sys(`${echo}\ncreated ${label}`);
+      const extra =
+        access === "invite" && made.token ? `\n${inviteUrl(id, made.token)}` : "";
+      sys(`${echo}\ncreated ${label}${extra}`);
     } catch {
       sys(`${echo}\nserver offline`);
     }
@@ -301,6 +425,17 @@ export function Chat() {
       sys(`${echo}\n${window.matchMedia("(max-width: 720px)").matches ? HELP_NARROW : HELP}`);
       return;
     }
+    if (cmd === "noise") {
+      hissOn.current = !hissOn.current;
+      localStorage.setItem("crt-noise", hissOn.current ? "on" : "off");
+      const el = noiseRef.current;
+      if (el) {
+        if (hissOn.current) void el.play().catch(() => {});
+        else el.pause();
+      }
+      sys(`${echo}\nstatic ${hissOn.current ? "on" : "off"}`);
+      return;
+    }
     if (cmd === "ls" || cmd === "rooms") {
       try {
         const res = await fetch(apiUrl("/api/rooms"));
@@ -314,6 +449,29 @@ export function Chat() {
                 .map((r) => (narrow ? `${r.id}\n  ${r.info}` : `${r.id.padEnd(16)}${r.info}`))
                 .join("\n");
         sys(`${echo}\n${lines || "no rooms"}`);
+      } catch {
+        sys(`${echo}\nserver offline`);
+      }
+      return;
+    }
+    if (cmd === "myrooms") {
+      if (!signedRef.current) {
+        sys(`${echo}\nmyrooms: sign in first`);
+        return;
+      }
+      try {
+        const res = await fetch(apiUrl("/api/my-rooms"), { credentials: "include" });
+        if (res.status === 401) {
+          sys(`${echo}\nmyrooms: sign in first`);
+          return;
+        }
+        const data = (await res.json()) as { rooms?: { id: string; access: string; role: string }[] };
+        const list = data.rooms ?? [];
+        sys(
+          `${echo}\n${
+            list.map((r) => `${r.id.padEnd(16)}${r.role}  ${r.access}`).join("\n") || "no rooms"
+          }`,
+        );
       } catch {
         sys(`${echo}\nserver offline`);
       }
@@ -338,6 +496,44 @@ export function Chat() {
         return;
       }
       await postRoom(id, "public", echo);
+      return;
+    }
+    if (cmd === "rmdir") {
+      if (!signedRef.current) {
+        sys(`${echo}\nrmdir: permission denied`);
+        return;
+      }
+      const id = parseRoomId(arg || roomRef.current || "");
+      if (!id) {
+        sys(`${echo}\nusage: /rmdir [room]`);
+        return;
+      }
+      try {
+        const res = await fetch(apiUrl(`/api/rooms/${id}/delete`), {
+          method: "POST",
+          credentials: "include",
+        });
+        if (res.status === 404) {
+          sys(`${echo}\nrmdir: no such room`);
+          return;
+        }
+        if (!res.ok) {
+          sys(`${echo}\nrmdir: permission denied`);
+          return;
+        }
+        if (roomRef.current === id) {
+          roomRef.current = null;
+          inbox.current = [];
+          presenceRef.current = [];
+          wsRef.current?.send(JSON.stringify({ type: "leave" }));
+          setCwd("~");
+          setFeed([{ id: `sys-${++sysN.current}`, sender: "", body: `${echo}\nremoved ${id}` }]);
+        } else {
+          sys(`${echo}\nremoved ${id}`);
+        }
+      } catch {
+        sys(`${echo}\nserver offline`);
+      }
       return;
     }
     if (cmd === "inv") {
@@ -369,7 +565,37 @@ export function Chat() {
           sys(`${echo}\ninv: ${err.error ?? "failed"}`);
           return;
         }
-        sys(`${echo}\ninvited ${arg}`);
+        const data = (await res.json()) as { token?: string };
+        const extra = data.token ? `\n${inviteUrl(roomRef.current, data.token)}` : "";
+        sys(`${echo}\ninvited ${arg}${extra}`);
+      } catch {
+        sys(`${echo}\nserver offline`);
+      }
+      return;
+    }
+    if (cmd === "link") {
+      if (!signedRef.current) {
+        sys(`${echo}\nlink: permission denied`);
+        return;
+      }
+      if (!roomRef.current) {
+        sys(`${echo}\nnot in a room`);
+        return;
+      }
+      try {
+        const res = await fetch(apiUrl(`/api/rooms/${roomRef.current}/link`), {
+          credentials: "include",
+        });
+        if (!res.ok) {
+          sys(`${echo}\nlink: not an invite room`);
+          return;
+        }
+        const data = (await res.json()) as { token?: string };
+        if (!data.token) {
+          sys(`${echo}\nlink: not an invite room`);
+          return;
+        }
+        sys(`${echo}\n${inviteUrl(roomRef.current, data.token)}`);
       } catch {
         sys(`${echo}\nserver offline`);
       }
@@ -412,6 +638,7 @@ export function Chat() {
       setSignedIn(false);
       const guest = loadGuestName();
       setNick(guest);
+      wsRef.current?.send(JSON.stringify({ type: "nick", nick: guest }));
       sys(`${echo}\nsigned out`);
       return;
     }
@@ -420,7 +647,7 @@ export function Chat() {
         sys(`${echo}\nnot in a room`);
         return;
       }
-      const names = [...new Set([...inbox.current.map((m) => m.sender), nickRef.current])];
+      const names = presenceRef.current.length ? presenceRef.current : [nickRef.current];
       sys(`${echo}\n${names.join("\n")}`);
       return;
     }
@@ -444,7 +671,7 @@ export function Chat() {
         return;
       }
       pendingJoin.current = { room: id, echo };
-      wsRef.current.send(JSON.stringify({ type: "join", room: id, password: passRef.current[id] }));
+      wsRef.current.send(JSON.stringify(joinMsg(id)));
       return;
     }
     if (cmd === "exit") {
@@ -456,6 +683,7 @@ export function Chat() {
       pendingJoin.current = null;
       gateRef.current = null;
       inbox.current = [];
+      presenceRef.current = [];
       wsRef.current?.send(JSON.stringify({ type: "leave" }));
       setPromptKind("shell");
       setCwd("~");
@@ -469,12 +697,48 @@ export function Chat() {
     sys(`${echo}\n/${cmd}: command not found`);
   }
 
+  function onKey(e: KeyboardEvent<HTMLInputElement>) {
+    if (promptKind === "password") return;
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const hits = mentionMatches(text);
+      if (!hits.length) return;
+      mentionI.current = (mentionI.current + 1) % hits.length;
+      const at = text.lastIndexOf("@");
+      const next = `${text.slice(0, at)}@${hits[mentionI.current]} `;
+      setText(next);
+      setHint(`tab: ${hits.join("  ")}`);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      if (!histRef.current.length) return;
+      e.preventDefault();
+      if (histI.current < 0) stashRef.current = text;
+      histI.current = histI.current < 0 ? histRef.current.length - 1 : Math.max(0, histI.current - 1);
+      setText(histRef.current[histI.current] ?? "");
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      if (histI.current < 0) return;
+      e.preventDefault();
+      histI.current += 1;
+      if (histI.current >= histRef.current.length) {
+        histI.current = -1;
+        setText(stashRef.current);
+        return;
+      }
+      setText(histRef.current[histI.current] ?? "");
+    }
+  }
+
   async function send(e: FormEvent) {
     e.preventDefault();
     const body = text.trim();
     if (!body || !nick) return;
     setText("");
     setHint("");
+    histI.current = -1;
+    mentionI.current = -1;
     const gate = gateRef.current;
     if (gate) {
       if (gate.kind === "auth") {
@@ -518,15 +782,17 @@ export function Chat() {
         setPromptKind("shell");
         gateRef.current = null;
         pendingJoin.current = { room: gate.room, echo: gate.echo };
-        wsRef.current?.send(JSON.stringify({ type: "join", room: gate.room, password: body }));
+        wsRef.current?.send(JSON.stringify(joinMsg(gate.room)));
         return;
       }
     }
     if (body.startsWith("/") || !roomRef.current) {
+      remember(body);
       await run(body);
       return;
     }
     try {
+      const room = roomRef.current;
       const res = await fetch(apiUrl("/api/messages"), {
         method: "POST",
         credentials: "include",
@@ -534,8 +800,9 @@ export function Chat() {
         body: JSON.stringify({
           sender: nick,
           body,
-          room: roomRef.current,
-          password: passRef.current[roomRef.current],
+          room,
+          password: passRef.current[room],
+          token: tokenRef.current[room],
         }),
       });
       if (!res.ok) {
@@ -581,7 +848,12 @@ export function Chat() {
         <input
           ref={inputRef}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            mentionI.current = -1;
+            setText(e.target.value);
+            applyHint(e.target.value);
+          }}
+          onKeyDown={onKey}
           maxLength={2000}
           autoComplete="off"
           autoCorrect="off"

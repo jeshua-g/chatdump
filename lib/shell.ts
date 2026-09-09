@@ -1,9 +1,12 @@
 export const HELP = `# Rooms
 /ls                 List rooms
 /rooms              List rooms + info
+/myrooms            Rooms you own or are invited to
 /mkdir <room>       Create a room (signed in)
 /mkdir <room> private  Private room
+/rmdir [room]       Delete a room you own
 /inv <name>         Invite a user
+/link               Invite URL for this room
 /ssh user@room      Connect to a room
 /exit               Leave the current room
 /pwd                Show current room
@@ -16,11 +19,13 @@ export const HELP = `# Rooms
 /logout             Log out
 
 # People
-/who                Show who's currently in the room
+/who                Who is in this room now
+@name               Mention (Tab to complete)
 
 # Chat
 /clear              Clear terminal
 /help               Show available commands
+/noise              Toggle CRT static
 
 # Voice
 /voice              Join/leave room voice
@@ -30,9 +35,12 @@ export const HELP = `# Rooms
 export const HELP_NARROW = `# Rooms
 /ls  list rooms
 /rooms  rooms + info
+/myrooms
 /mkdir <room>
 /mkdir <room> private
+/rmdir [room]
 /inv <name>
+/link
 /ssh user@room
 /exit  leave room
 /pwd  current room
@@ -46,15 +54,19 @@ export const HELP_NARROW = `# Rooms
 
 # People
 /who  in this room
+@name  Tab to complete
 
 # Chat
 /clear
 /help
+/noise  CRT static
 
 # Voice
 /voice
 /mute
 /deafen`;
+
+export function parseSsh(arg: string) {
   const at = arg.lastIndexOf("@");
   if (at === -1) return { user: "", room: arg };
   return { user: arg.slice(0, at), room: arg.slice(at + 1) };

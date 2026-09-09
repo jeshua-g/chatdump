@@ -57,10 +57,24 @@ if (db.canEnter("secret", null, "nope").ok) throw new Error("bad password allowe
 if (!db.canEnter("secret", "u1").ok) throw new Error("owner locked out");
 const club = db.createRoom("club", "u1", "invite");
 if (!club.ok) throw new Error("invite room");
+if (!club.token) throw new Error("invite token missing");
+if (!db.canEnter("club", null, undefined, club.token).ok) throw new Error("token join");
 if (db.canEnter("club", "u2").ok) throw new Error("stranger entered invite room");
 db.setNick("u2", "Fern");
 if (!db.invite("club", "u1", "Fern").ok) throw new Error("invite failed");
 if (!db.canEnter("club", "u2").ok) throw new Error("invitee blocked");
 if (db.invite("club", "u2", "Moss").reason !== "denied") throw new Error("non-owner invited");
+const link = db.inviteLink("club", "u1");
+if (!link.ok || link.token !== club.token) throw new Error("invite link");
+if (db.inviteLink("club", "u2").ok) throw new Error("invite link leaked");
+const mine = db.listMine("u1").map((r) => r.id);
+if (!mine.includes("club") || !mine.includes("lounge")) throw new Error("listMine owner");
+if (!db.listMine("u2").some((r) => r.id === "club" && r.role === "invite")) {
+  throw new Error("listMine invitee");
+}
+if (db.deleteRoom("club", "u2").ok) throw new Error("non-owner deleted");
+if (db.deleteRoom("guest", "u1").ok) throw new Error("guest deleted");
+if (!db.deleteRoom("club", "u1").ok) throw new Error("owner delete failed");
+if (db.hasRoom("club")) throw new Error("deleted room lingered");
 rmSync(dir, { recursive: true });
 console.log("ok");
