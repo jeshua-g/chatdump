@@ -30,5 +30,10 @@ db.add({ id: "new", roomId: GUEST_ROOM, sender: "a", body: "kept", createdAt: no
 const ids = db.history(GUEST_ROOM).map((m) => m.id);
 if (ids.includes("old")) throw new Error("expired guest message stayed");
 if (!ids.includes("new")) throw new Error("fresh guest message dropped");
+if (db.getNick("u1") !== null) throw new Error("missing nick should be null");
+db.setNick("u1", "Late Lark");
+if (db.getNick("u1") !== "Late Lark") throw new Error("nick did not persist");
+db.setNick("u1", "Moss");
+if (db.getNick("u1") !== "Moss") throw new Error("nick did not update");
 rmSync(dir, { recursive: true });
 console.log("ok");

@@ -43,6 +43,10 @@ export function openDb(dataDir: string) {
       window_start INTEGER NOT NULL,
       last_sent INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS nicks (
+      user_id TEXT PRIMARY KEY,
+      nick TEXT NOT NULL
+    );
   `);
   try {
     db.exec(`ALTER TABLE guest_limits ADD COLUMN last_sent INTEGER NOT NULL DEFAULT 0`);
@@ -65,6 +69,11 @@ export function openDb(dataDir: string) {
   const upsertLimit = db.prepare(
     `INSERT INTO guest_limits (ip, count, window_start, last_sent) VALUES (?, ?, ?, ?)
      ON CONFLICT(ip) DO UPDATE SET count = excluded.count, window_start = excluded.window_start, last_sent = excluded.last_sent`,
+  );
+  const getNickStmt = db.prepare(`SELECT nick FROM nicks WHERE user_id = ?`);
+  const setNickStmt = db.prepare(
+    `INSERT INTO nicks (user_id, nick) VALUES (?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET nick = excluded.nick`,
   );
   const expireGuest = db.prepare(`DELETE FROM messages WHERE room_id = ? AND created_at < ?`);
   let lastPrune = 0;
@@ -99,7 +108,15 @@ export function openDb(dataDir: string) {
       if (msg.roomId === GUEST_ROOM) pruneGuestIfNeeded(msg.createdAt);
     },
 
-    /** @returns remaining sends in this window, or 0 if blocked */
+    getNick(userId: string) {
+      const row = getNickStmt.get(userId) as { nick: string } | undefined;
+      return row?.nick ?? null;
+    },
+
+    setNick(userId: string, nick: string) {
+      setNickStmt.run(userId, nick);
+    },
+
     consumeGuest(
       ip: string,
       now = Date.now(),

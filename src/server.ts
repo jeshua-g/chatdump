@@ -66,6 +66,28 @@ const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
 app.get("/api/health", (c) => c.json({ ok: true, origin: "vps" }));
 
+app.get("/api/me", async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) return c.json({ error: "unauthorized" }, 401);
+  const nick = db.getNick(session.user.id) || session.user.name?.trim().slice(0, 24) || "";
+  return c.json({ nick, name: session.user.name });
+});
+
+app.post("/api/nick", async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) return c.json({ error: "unauthorized" }, 401);
+  let body: { nick?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid json" }, 400);
+  }
+  const nick = (body.nick ?? "").trim().slice(0, 24);
+  if (!nick) return c.json({ error: "nick required" }, 400);
+  db.setNick(session.user.id, nick);
+  return c.json({ nick });
+});
+
 app.get("/api/messages", (c) => c.json({ messages: db.history(GUEST_ROOM) }));
 
 app.post("/api/messages", async (c) => {
@@ -79,7 +101,9 @@ app.post("/api/messages", async (c) => {
   console.log(`[API] JSON parsed: ${(performance.now() - start).toFixed(1)}ms`);
 
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  const sender = (session?.user.name || body.sender || "").trim().slice(0, 24);
+  const sender = ((session ? db.getNick(session.user.id) || session.user.name : body.sender) || "")
+    .trim()
+    .slice(0, 24);
   const text = (body.body ?? "").trim().slice(0, 2000);
   if (!sender || !text) return c.json({ error: "sender and body required" }, 400);
 

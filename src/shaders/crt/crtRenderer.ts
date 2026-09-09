@@ -3,8 +3,42 @@ import { CRT_FRAGMENT_SHADER, CRT_VERTEX_SHADER } from "./crtShaders";
 
 export const CRT_VARIANTS = ["terminal", "cinematic", "blue-screen", "nintendo"] as const;
 export type CrtChatLine = { id: string; sender: string; body: string };
-export type CrtOptions = { variant: CrtVariant; speed: number; typeSpeed: number; motion: number; brightness: number; opacity: number; hue: number; saturation: number; messages: CrtChatLine[]; live: boolean; joined: boolean; nick: string; draft: string; hint: string };
-export const CRT_DEFAULTS: CrtOptions = { variant: "terminal", speed: 1, typeSpeed: 1, motion: 1, brightness: 1, opacity: 1, hue: 0, saturation: 1, messages: [], live: false, joined: false, nick: "", draft: "", hint: "" };
+export type CrtOptions = {
+  variant: CrtVariant;
+  speed: number;
+  typeSpeed: number;
+  motion: number;
+  brightness: number;
+  opacity: number;
+  hue: number;
+  saturation: number;
+  messages: CrtChatLine[];
+  live: boolean;
+  joined: boolean;
+  nick: string;
+  draft: string;
+  hint: string;
+  cwd: string;
+  authSelect: boolean;
+};
+export const CRT_DEFAULTS: CrtOptions = {
+  variant: "terminal",
+  speed: 1,
+  typeSpeed: 1,
+  motion: 1,
+  brightness: 1,
+  opacity: 1,
+  hue: 0,
+  saturation: 1,
+  messages: [],
+  live: false,
+  joined: false,
+  nick: "",
+  draft: "",
+  hint: "",
+  cwd: "~",
+  authSelect: false,
+};
 export const crtStyle = (variant: CrtVariant): CrtStyle => CRT_STYLES[variant] ?? CRT_STYLES.terminal;
 type Segment = { t: string; c: "p" | "d" | "a" | "h" };
 const segment = (text: string, color: Segment["c"] = "p"): Segment => ({ t: text, c: color });
@@ -32,9 +66,29 @@ function wrapBody(text: string, wrap: number) {
   }
   return out.length ? out : [""];
 }
+function wrapLines(text: string, wrap: number) {
+  const out: string[] = [];
+  for (const para of text.split("\n")) {
+    let rest = para;
+    if (!rest) {
+      out.push("");
+      continue;
+    }
+    while (rest.length > wrap) {
+      out.push(rest.slice(0, wrap));
+      rest = rest.slice(wrap);
+    }
+    out.push(rest);
+  }
+  return out.length ? out : [""];
+}
 function messageRows(messages: CrtChatLine[], wrap: number): Segment[][] {
   const rows: Segment[][] = [];
   for (const msg of messages) {
+    if (!msg.sender) {
+      for (const extra of wrapLines(msg.body, wrap)) rows.push([segment(extra, "d")]);
+      continue;
+    }
     const name = msg.sender.slice(0, 16);
     const body = msg.body.slice(0, 400);
     if (wrap < 40) {
@@ -58,9 +112,11 @@ function promptRows(prefix: string, value: string, prefixColor: Segment["c"], wr
 }
 function buildScreen(options: CrtOptions, wrap: number, minRows: number): Segment[][] {
   const right = options.live ? "live" : "offline";
-  const gap = Math.max(2, wrap - "GUEST ROOM".length - right.length);
+  const title = (options.cwd || "~").replace(/^~\//, "").toUpperCase() || "HOME";
+  const label = title.length > 12 ? title.slice(0, 12) : title;
+  const gap = Math.max(2, wrap - label.length - right.length);
   const header: Segment[][] = [
-    [segment("GUEST ROOM", "d"), segment(" ".repeat(gap), "d"), segment(right, options.live ? "p" : "a")],
+    [segment(label === "~" || label === "HOME" ? "HOME" : label, "d"), segment(" ".repeat(gap), "d"), segment(right, options.live ? "p" : "a")],
     [segment("chat.jdump", "h")],
     [],
   ];
@@ -68,10 +124,16 @@ function buildScreen(options: CrtOptions, wrap: number, minRows: number): Segmen
   if (!body.length && !options.live) body = [[segment("no carrier", "d")]];
   const footer: Segment[][] = [];
   if (options.hint) footer.push([segment(options.hint.slice(0, wrap), "a")]);
-  footer.push(...promptRows(options.joined ? `${(options.nick || "anon").slice(0, 16)}@chat:~$ ` : "nick@chat:~$ ", options.joined ? options.draft : options.nick, options.joined ? "a" : "d", wrap));
+  const nick = (options.nick || "anon").slice(0, 16);
+  const path = options.cwd || "~";
+  const prefix = options.authSelect ? "Select: " : `${nick}@chat:${path}$ `;
+  footer.push(...promptRows(prefix, options.draft, options.authSelect ? "d" : "a", wrap));
   const room = Math.max(minRows - header.length - footer.length, 4);
-  const shown = body.slice(-room);
-  return [...header, ...shown, ...Array(Math.max(0, room - shown.length)).fill([]), ...footer];
+  const last = (options.messages ?? []).at(-1);
+  const sysDump = last && !last.sender ? messageRows([last], wrap) : null;
+  const shown = sysDump && sysDump.length > room ? sysDump : body.slice(-room);
+  const pad = shown === sysDump ? 0 : Math.max(0, room - shown.length);
+  return [...header, ...shown, ...Array(pad).fill([]), ...footer];
 }
 const COLORS = { p: { fill: "#8df0b4", glow: "rgba(28,236,132,0.95)" }, d: { fill: "#4f9a76", glow: "rgba(28,236,132,0.45)" }, a: { fill: "#ffba5e", glow: "rgba(255,150,52,0.95)" }, h: { fill: "#eafff3", glow: "rgba(120,255,190,0.95)" } };
 const lineLength = (line: Segment[]) => line.reduce((total, item) => total + item.t.length, 0);
@@ -90,7 +152,7 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
   let width = 1, height = 1, cssWidth = 1, cssHeight = 1, fontSize = 14, lineHeight = 20, startY = 0, charWidth = 8, caretX = 0, caretY = 0, typed = 0, done = true, textDirty = true, lastTextAt = 0, lastReveal = -1, lastBlink = -1, variant: CrtVariant = "terminal", style = crtStyle(variant), cols = 56, minRows = 19, log = buildScreen(CRT_DEFAULTS, 56, 19), total = 0, maxChars = 1, feedSig = ""; const startedAt = performance.now();
   const measure = () => { total = log.reduce((n, line) => n + lineLength(line), 0); maxChars = Math.max(cols, ...log.map(lineLength)); };
   const syncFeed = (options: CrtOptions) => {
-    const sig = `${(options.messages ?? []).map((m) => m.id).join("\n")}\0${options.live}\0${options.joined}\0${options.nick}\0${options.draft}\0${options.hint}\0${cols}`;
+    const sig = `${(options.messages ?? []).map((m) => m.id).join("\n")}\0${options.live}\0${options.joined}\0${options.nick}\0${options.draft}\0${options.hint}\0${options.cwd}\0${options.authSelect}\0${cols}`;
     if (sig === feedSig) return;
     log = buildScreen(options, cols, minRows);
     measure();
