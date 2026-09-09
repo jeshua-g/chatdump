@@ -3,6 +3,7 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { authMenu, helpText, parseRoomId, parseSsh, privateMenu, settingsMenu } from "@/lib/shell";
+import { MiniChat } from "@/components/MiniChat";
 import { CrtBackground } from "@/src/shaders/crt/CrtBackground";
 import type { CrtChatLine } from "@/src/shaders/crt/crtRenderer";
 
@@ -169,7 +170,6 @@ export function Chat() {
   const urlJoin = useRef<{ room: string; token: string } | null>(null);
   const hissOn = useRef(true);
   const skinRef = useRef<"crt" | "min">("crt");
-  const tailRef = useRef<HTMLLIElement>(null);
   const booted = useRef(false);
   const wsRef = useRef<WebSocket | undefined>(undefined);
   const nickRef = useRef("");
@@ -194,6 +194,7 @@ export function Chat() {
     setSkin(next);
     localStorage.setItem("chat-skin", next);
     document.documentElement.classList.toggle("skin-min", next === "min");
+    document.documentElement.classList.toggle("dark", next === "min");
     const el = noiseRef.current;
     if (!el) return;
     if (next === "min") el.pause();
@@ -449,10 +450,6 @@ export function Chat() {
     }
     tryUrlJoin();
   }, [live, nick]);
-
-  useEffect(() => {
-    tailRef.current?.scrollIntoView({ block: "end" });
-  }, [feed, text, hint, skin]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -1049,35 +1046,29 @@ export function Chat() {
     ws.send(JSON.stringify({ type: "send", body }));
   }
 
-  const promptPrefix =
-    promptKind === "select"
-      ? "Select: "
-      : promptKind === "password"
-        ? "Password: "
-        : `${nick || "anon"}@${host()}:${cwd}$ `;
-  const shownDraft = promptKind === "password" ? "*".repeat(text.length) : text;
   const roomLabel = cwd === "~" ? "HOME" : cwd.replace(/^~\//, "");
 
   return (
     <div className={`shell${skin === "min" ? " skin-min" : ""}`} onPointerDown={() => inputRef.current?.focus()}>
       {skin === "min" ? (
-        <div className="plain">
-          <div className="plain-top">
-            <span>{roomLabel}</span>
-            <span>{live ? "live" : "offline"}</span>
-          </div>
-          <ol className="plain-feed" aria-live="polite">
-            {feed.map((msg) => (
-              <li key={msg.id}>{msg.sender ? `${msg.sender}: ${msg.body}` : msg.body}</li>
-            ))}
-            <li ref={tailRef} />
-          </ol>
-          {hint ? <div className="plain-hint">{hint}</div> : null}
-          <div className="plain-line">
-            {promptPrefix}
-            {shownDraft}
-          </div>
-        </div>
+        <MiniChat
+          feed={feed}
+          nick={nick}
+          live={live}
+          roomLabel={roomLabel}
+          hint={hint}
+          value={text}
+          promptKind={promptKind}
+          lobby={cwd === "~"}
+          inputRef={inputRef}
+          onChange={(next) => {
+            mentionI.current = -1;
+            setText(next);
+            applyHint(next);
+          }}
+          onKeyDown={onKey}
+          onSubmit={send}
+        />
       ) : (
         <>
           <div className="shader-frame">
@@ -1108,25 +1099,27 @@ export function Chat() {
           </ol>
         </>
       )}
-      <form className="ghost" onSubmit={send}>
-        <input
-          ref={inputRef}
-          value={text}
-          onChange={(e) => {
-            mentionI.current = -1;
-            setText(e.target.value);
-            applyHint(e.target.value);
-          }}
-          onKeyDown={onKey}
-          maxLength={2000}
-          autoComplete="off"
-          autoCorrect="off"
-          spellCheck={false}
-          type={promptKind === "password" ? "password" : "text"}
-          aria-label="Command"
-          autoFocus
-        />
-      </form>
+      {skin === "min" ? null : (
+        <form className="ghost" onSubmit={send}>
+          <input
+            ref={inputRef}
+            value={text}
+            onChange={(e) => {
+              mentionI.current = -1;
+              setText(e.target.value);
+              applyHint(e.target.value);
+            }}
+            onKeyDown={onKey}
+            maxLength={2000}
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            type={promptKind === "password" ? "password" : "text"}
+            aria-label="Command"
+            autoFocus
+          />
+        </form>
+      )}
       <audio ref={noiseRef} src={NOISE} loop preload="auto" />
     </div>
   );
