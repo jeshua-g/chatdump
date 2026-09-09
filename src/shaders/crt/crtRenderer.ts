@@ -151,7 +151,7 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
   const uniform = (name: string) => gl.getUniformLocation(program, name);
   const uTexture = uniform("uTex"), uResolution = uniform("uRes"), uTime = uniform("uTime"), uMotion = uniform("uMotion"), uCurve = uniform("uCurve"), uScan = uniform("uScan"), uScanDepth = uniform("uScanDepth"), uTriad = uniform("uTriad"), uGrille = uniform("uGrille"), uChroma = uniform("uChroma"), uBar = uniform("uBar"), uFlicker = uniform("uFlicker"), uGrain = uniform("uGrain"), uNoise = uniform("uNoise"), uVignette = uniform("uVignette"), uMono = uniform("uMono"), uGain = uniform("uGain"), uHalo = uniform("uHalo"), uSheen = uniform("uSheen"), uRoom = uniform("uRoom");
   const texture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, texture); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); gl.uniform1i(uTexture, 0);
-  let width = 1, height = 1, cssWidth = 1, cssHeight = 1, fontSize = 14, lineHeight = 20, startY = 0, charWidth = 8, caretX = 0, caretY = 0, typed = 0, done = true, textDirty = true, lastTextAt = 0, lastReveal = -1, lastBlink = -1, variant: CrtVariant = "terminal", style = crtStyle(variant), cols = 56, minRows = 19, log = buildScreen(CRT_DEFAULTS, 56, 19), total = 0, maxChars = 1, feedSig = ""; const startedAt = performance.now();
+  let width = 1, height = 1, cssWidth = 1, cssHeight = 1, fontSize = 14, lineHeight = 20, startY = 0, charWidth = 8, wide = 1.32, caretX = 0, caretY = 0, typed = 0, done = true, textDirty = true, lastTextAt = 0, lastReveal = -1, lastBlink = -1, variant: CrtVariant = "terminal", style = crtStyle(variant), cols = 56, minRows = 19, log = buildScreen(CRT_DEFAULTS, 56, 19), total = 0, maxChars = 1, feedSig = ""; const startedAt = performance.now();
   const paper = new Image();
   paper.src = "/vaultboy.webp";
   paper.onload = () => { lastReveal = -1; lastBlink = -1; textDirty = true; };
@@ -193,14 +193,24 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
   };
   const layout = () => {
-    startY = height * (cssWidth < 480 ? 0.10 : 0.135);
-    lineHeight = height * (cssWidth < 480 ? 0.80 : 0.74) / Math.max(log.length, minRows);
-    const minPx = (cssWidth < 480 ? 15 : cssWidth < 720 ? 13 : 8) * (width / cssWidth);
-    fontSize = Math.max(minPx, Math.min(lineHeight * 0.82, width * 0.90 / (Math.max(maxChars, 1) * 0.62)));
+    startY = height * (cssWidth < 480 ? 0.10 : 0.12);
+    lineHeight = height * (cssWidth < 480 ? 0.82 : 0.80) / Math.max(log.length, minRows);
+    const minPx = (cssWidth < 480 ? 15 : cssWidth < 720 ? 13 : 10) * (width / cssWidth);
+    const stretch = cssWidth < 480 ? 1.12 : 1.32;
+    wide = stretch;
+    fontSize = Math.max(minPx, Math.min(lineHeight * 0.9, width * 0.92 / (Math.max(maxChars, 1) * 0.62 * stretch)));
     textContext.font = `600 ${fontSize.toFixed(2)}px ${CRT_FONT}`;
-    charWidth = textContext.measureText("M").width || fontSize * 0.6;
+    textContext.letterSpacing = "0px";
+    charWidth = (textContext.measureText("M").width || fontSize * 0.6) * stretch;
   };
   const setStyle = (key: Segment["c"], glow: boolean) => { const color = COLORS[key]; textContext.fillStyle = color.fill; textContext.shadowColor = glow ? color.glow : "transparent"; textContext.shadowBlur = glow ? fontSize * (cssWidth < 480 ? 0.16 : 0.38) : 0; };
+  const paint = (text: string, x: number, y: number) => {
+    textContext.save();
+    textContext.translate(x, y);
+    textContext.scale(wide, 1);
+    textContext.fillText(text, 0, 0);
+    textContext.restore();
+  };
   /* two passes per glyph: a soft phosphor halo, then the same glyph re-filled with
      the shadow off so the stroke core stays crisp at any backing resolution */
   const drawScreen = (reveal: number) => {
@@ -215,7 +225,7 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
       textContext.globalAlpha = 1;
     }
     textContext.textAlign = "left"; textContext.textBaseline = "top"; textContext.font = `600 ${fontSize.toFixed(2)}px ${CRT_FONT}`; let remaining = reveal, y = startY; caretX = Math.floor((width - maxChars * charWidth) / 2); caretY = startY;
-    for (const line of log) { const length = lineLength(line), visible = reveal === Infinity ? Infinity : Math.min(remaining, length); let x = Math.floor((width - maxChars * charWidth) / 2), drawn = 0; for (const item of line) { let text = item.t; if (visible !== Infinity) { const left = visible - drawn; if (left <= 0) break; if (left < text.length) text = text.slice(0, left); } if (text.length) { setStyle(item.c, true); textContext.fillText(text, x, y); setStyle(item.c, false); textContext.fillText(text, x, y); x += charWidth * text.length; } drawn += item.t.length; if (visible !== Infinity && drawn >= visible) break; } caretX = x; caretY = y; if (visible !== Infinity) remaining -= visible; y += lineHeight; if (visible !== Infinity && remaining <= 0) break; }
+    for (const line of log) { const length = lineLength(line), visible = reveal === Infinity ? Infinity : Math.min(remaining, length); let x = Math.floor((width - maxChars * charWidth) / 2), drawn = 0; for (const item of line) { let text = item.t; if (visible !== Infinity) { const left = visible - drawn; if (left <= 0) break; if (left < text.length) text = text.slice(0, left); } if (text.length) { setStyle(item.c, true); paint(text, x, y); setStyle(item.c, false); paint(text, x, y); x += charWidth * text.length; } drawn += item.t.length; if (visible !== Infinity && drawn >= visible) break; } caretX = x; caretY = y; if (visible !== Infinity) remaining -= visible; y += lineHeight; if (visible !== Infinity && remaining <= 0) break; }
   };
   const drawCursor = () => { textContext.shadowColor = COLORS.p.glow; textContext.shadowBlur = fontSize * 0.42; textContext.fillStyle = "#bdf8d2"; textContext.fillRect(caretX, caretY + fontSize * 0.06, Math.max(charWidth * 0.92, 4), fontSize * 0.96); textContext.shadowBlur = 0; textContext.fillRect(caretX, caretY + fontSize * 0.06, Math.max(charWidth * 0.92, 4), fontSize * 0.96); };
   const uploadTexture = () => { gl.bindTexture(gl.TEXTURE_2D, texture); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); textDirty = false; };
