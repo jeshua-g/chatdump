@@ -25,6 +25,7 @@ export const HELP = `# Rooms
 # Chat
 /clear              Clear terminal
 /help               Show available commands
+/settings           CRT or minimal display
 /noise              Toggle CRT static
 
 # Voice
@@ -76,6 +77,7 @@ export const HELP_NARROW = `# Rooms
 # Chat
 /clear
 /help
+/settings  CRT or minimal
 /noise  CRT static
 
 # Voice
@@ -98,6 +100,13 @@ export function parseRoomId(raw: string) {
 export function privateMenu() {
   return `[1] pswd
 [2] inv only`;
+}
+
+export function settingsMenu(skin: string) {
+  return `quality  ${skin === "min" ? "minimal" : "CRT"}
+
+[1] CRT
+[2] minimal`;
 }
 
 export function authMenu(nick: string | null) {

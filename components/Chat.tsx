@@ -2,7 +2,7 @@
 
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { authClient } from "@/lib/auth-client";
-import { authMenu, helpText, parseRoomId, parseSsh, privateMenu } from "@/lib/shell";
+import { authMenu, helpText, parseRoomId, parseSsh, privateMenu, settingsMenu } from "@/lib/shell";
 import { CrtBackground } from "@/src/shaders/crt/CrtBackground";
 import type { CrtChatLine } from "@/src/shaders/crt/crtRenderer";
 
@@ -127,12 +127,21 @@ function loadGuestName() {
 
 type Gate =
   | { kind: "auth" }
+  | { kind: "settings" }
   | { kind: "mkdir-private"; id: string; echo: string }
   | { kind: "mkdir-pass"; id: string; echo: string }
   | { kind: "ssh-pass"; room: string; echo: string };
 
 function asLines(list: Message[]): CrtChatLine[] {
   return list.map((m) => ({ id: m.id, sender: m.sender, body: m.body }));
+}
+
+function loadSkin(): "crt" | "min" {
+  try {
+    return localStorage.getItem("chat-skin") === "min" ? "min" : "crt";
+  } catch {
+    return "crt";
+  }
 }
 
 export function Chat() {
@@ -144,6 +153,7 @@ export function Chat() {
   const [cwd, setCwd] = useState("~");
   const [promptKind, setPromptKind] = useState<"shell" | "select" | "password">("shell");
   const [feed, setFeed] = useState<CrtChatLine[]>([]);
+  const [skin, setSkin] = useState<"crt" | "min">("crt");
   const seen = useRef(new Set<string>());
   const inbox = useRef<Message[]>([]);
   const roomRef = useRef<string | null>(null);
@@ -158,6 +168,8 @@ export function Chat() {
   const mentionI = useRef(-1);
   const urlJoin = useRef<{ room: string; token: string } | null>(null);
   const hissOn = useRef(true);
+  const skinRef = useRef<"crt" | "min">("crt");
+  const tailRef = useRef<HTMLLIElement>(null);
   const booted = useRef(false);
   const wsRef = useRef<WebSocket | undefined>(undefined);
   const nickRef = useRef("");
@@ -171,9 +183,21 @@ export function Chat() {
   nickRef.current = nick;
   signedRef.current = signedIn;
   cwdRef.current = cwd;
+  skinRef.current = skin;
 
   function host() {
     return signedRef.current ? "chat" : "anon";
+  }
+
+  function applySkin(next: "crt" | "min") {
+    skinRef.current = next;
+    setSkin(next);
+    localStorage.setItem("chat-skin", next);
+    document.documentElement.classList.toggle("skin-min", next === "min");
+    const el = noiseRef.current;
+    if (!el) return;
+    if (next === "min") el.pause();
+    else if (hissOn.current) void el.play().catch(() => {});
   }
 
   function sys(body: string) {
@@ -231,6 +255,7 @@ export function Chat() {
     booted.current = true;
     histRef.current = loadHist();
     hissOn.current = localStorage.getItem("crt-noise") !== "off";
+    applySkin(loadSkin());
     const q = new URLSearchParams(location.search);
     const room = parseRoomId(q.get("join") ?? "");
     const token = q.get("t") ?? "";
@@ -420,13 +445,17 @@ export function Chat() {
   }, [live, nick]);
 
   useEffect(() => {
+    tailRef.current?.scrollIntoView({ block: "end" });
+  }, [feed, text, hint, skin]);
+
+  useEffect(() => {
     const el = noiseRef.current;
     if (!el) return;
     const kick = () => {
-      if (hissOn.current) void el.play().catch(() => {});
+      if (hissOn.current && skinRef.current !== "min") void el.play().catch(() => {});
     };
     const vis = () => {
-      if (document.hidden || !hissOn.current) el.pause();
+      if (document.hidden || !hissOn.current || skinRef.current === "min") el.pause();
       else void el.play().catch(() => {});
     };
     window.addEventListener("pointerdown", kick);
@@ -511,7 +540,7 @@ export function Chat() {
       localStorage.setItem("crt-noise", hissOn.current ? "on" : "off");
       const el = noiseRef.current;
       if (el) {
-        if (hissOn.current) void el.play().catch(() => {});
+        if (hissOn.current && skinRef.current !== "min") void el.play().catch(() => {});
         else el.pause();
       }
       sys(`${echo}\nstatic ${hissOn.current ? "on" : "off"}`);
@@ -804,6 +833,23 @@ export function Chat() {
       setPromptKind("select");
       return;
     }
+    if (cmd === "settings") {
+      const pick = arg.toLowerCase();
+      if (pick === "crt" || pick === "1") {
+        applySkin("crt");
+        sys(`${echo}\nquality CRT`);
+        return;
+      }
+      if (pick === "min" || pick === "minimal" || pick === "2") {
+        applySkin("min");
+        sys(`${echo}\nquality minimal`);
+        return;
+      }
+      sys(`${echo}\n${settingsMenu(skinRef.current)}`);
+      gateRef.current = { kind: "settings" };
+      setPromptKind("select");
+      return;
+    }
     if (cmd === "passwd") {
       sys(`${echo}\nno password - use /auth (Google / GitHub)`);
       return;
@@ -933,6 +979,22 @@ export function Chat() {
         sys("cancelled");
         return;
       }
+      if (gate.kind === "settings") {
+        gateRef.current = null;
+        setPromptKind("shell");
+        if (body === "1") {
+          applySkin("crt");
+          sys("quality CRT");
+          return;
+        }
+        if (body === "2") {
+          applySkin("min");
+          sys("quality minimal");
+          return;
+        }
+        sys("cancelled");
+        return;
+      }
       if (gate.kind === "mkdir-private") {
         if (body === "1") {
           gateRef.current = { kind: "mkdir-pass", id: gate.id, echo: gate.echo };
@@ -994,34 +1056,65 @@ export function Chat() {
     }
   }
 
+  const promptPrefix =
+    promptKind === "select"
+      ? "Select: "
+      : promptKind === "password"
+        ? "Password: "
+        : `${nick || "anon"}@${host()}:${cwd}$ `;
+  const shownDraft = promptKind === "password" ? "*".repeat(text.length) : text;
+  const roomLabel = cwd === "~" ? "HOME" : cwd.replace(/^~\//, "");
+
   return (
-    <div className="shell" onPointerDown={() => inputRef.current?.focus()}>
-      <div className="shader-frame">
-        <CrtBackground
-          variant="terminal"
-          speed={1.0}
-          typeSpeed={1.0}
-          motion={1.0}
-          hue={0}
-          saturation={1.0}
-          brightness={1.0}
-          opacity={1.0}
-          messages={feed}
-          live={live}
-          joined={Boolean(nick)}
-          nick={nick}
-          draft={text}
-          hint={hint}
-          cwd={cwd}
-          promptKind={promptKind}
-          signed={signedIn}
-        />
-      </div>
-      <ol className="sr-only" aria-live="polite">
-        {feed.map((msg) => (
-          <li key={msg.id}>{msg.sender ? `${msg.sender}: ${msg.body}` : msg.body}</li>
-        ))}
-      </ol>
+    <div className={`shell${skin === "min" ? " skin-min" : ""}`} onPointerDown={() => inputRef.current?.focus()}>
+      {skin === "min" ? (
+        <div className="plain">
+          <div className="plain-top">
+            <span>{roomLabel}</span>
+            <span>{live ? "live" : "offline"}</span>
+          </div>
+          <ol className="plain-feed" aria-live="polite">
+            {feed.map((msg) => (
+              <li key={msg.id}>{msg.sender ? `${msg.sender}: ${msg.body}` : msg.body}</li>
+            ))}
+            <li ref={tailRef} />
+          </ol>
+          {hint ? <div className="plain-hint">{hint}</div> : null}
+          <div className="plain-line">
+            {promptPrefix}
+            {shownDraft}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="shader-frame">
+            <CrtBackground
+              variant="terminal"
+              speed={1.0}
+              typeSpeed={1.0}
+              motion={1.0}
+              hue={0}
+              saturation={1.0}
+              brightness={1.0}
+              opacity={1.0}
+              messages={feed}
+              live={live}
+              joined={Boolean(nick)}
+              nick={nick}
+              draft={text}
+              hint={hint}
+              cwd={cwd}
+              promptKind={promptKind}
+              signed={signedIn}
+            />
+          </div>
+          <ol className="sr-only" aria-live="polite">
+            {feed.map((msg) => (
+              <li key={msg.id}>{msg.sender ? `${msg.sender}: ${msg.body}` : msg.body}</li>
+            ))}
+          </ol>
+        </>
+      )}
       <form className="ghost" onSubmit={send}>
         <input
           ref={inputRef}
