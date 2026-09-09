@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 export const metadata: Metadata = {
   title: "Terms — chat.jdump",
@@ -8,7 +9,7 @@ export default function TermsPage() {
   return (
     <main className="legal">
       <p className="legal-kicker">
-        <a href="/">chat.jdump</a>
+        <Link href="/">chat.jdump</Link>
       </p>
       <h1>Terms of service</h1>
       <p>Last updated 9 September 2026. By using chat.jdump you agree to this.</p>
@@ -42,7 +43,7 @@ export default function TermsPage() {
       <p>
         <a href="mailto:jeshua@jeshuagalao.dev">jeshua@jeshuagalao.dev</a>
         {" · "}
-        <a href="/privacy">Privacy policy</a>
+        <Link href="/privacy">Privacy policy</Link>
       </p>
     </main>
   );

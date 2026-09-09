@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 export const metadata: Metadata = {
   title: "Privacy — chat.jdump",
@@ -8,7 +9,7 @@ export default function PrivacyPage() {
   return (
     <main className="legal">
       <p className="legal-kicker">
-        <a href="/">chat.jdump</a>
+        <Link href="/">chat.jdump</Link>
       </p>
       <h1>Privacy policy</h1>
       <p>Last updated 9 September 2026. This is a small personal chat, not a company product.</p>
@@ -41,7 +42,7 @@ export default function PrivacyPage() {
       <p>
         <a href="mailto:jeshua@jeshuagalao.dev">jeshua@jeshuagalao.dev</a>
         {" · "}
-        <a href="/terms">Terms of service</a>
+        <Link href="/terms">Terms of service</Link>
       </p>
     </main>
   );
