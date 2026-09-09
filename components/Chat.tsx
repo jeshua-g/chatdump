@@ -14,6 +14,9 @@ type Message = {
   createdAt: number;
 };
 
+const NOISE =
+  "https://res.cloudinary.com/qnt0vxiu/video/upload/v1788945215/freesound_community-analog-crt-tv-electronic-static-noise-60428_ywldmf.mp3";
+
 function apiBase() {
   if (process.env.NODE_ENV === "development") return "http://127.0.0.1:3000";
   return process.env.NEXT_PUBLIC_API_URL ?? "https://chat-api.jdump.com";
@@ -108,6 +111,7 @@ export function Chat() {
   const cwdRef = useRef("~");
   const sysN = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const noiseRef = useRef<HTMLAudioElement>(null);
   nickRef.current = nick;
   signedRef.current = signedIn;
   cwdRef.current = cwd;
@@ -212,6 +216,28 @@ export function Chat() {
       stop = true;
       clearTimeout(timer);
       ws?.close();
+    };
+  }, []);
+
+  useEffect(() => {
+    const el = noiseRef.current;
+    if (!el) return;
+    el.volume = 1;
+    const kick = () => {
+      void el.play().catch(() => {});
+    };
+    const vis = () => {
+      if (document.hidden) el.pause();
+      else void el.play().catch(() => {});
+    };
+    window.addEventListener("pointerdown", kick);
+    window.addEventListener("keydown", kick);
+    document.addEventListener("visibilitychange", vis);
+    return () => {
+      window.removeEventListener("pointerdown", kick);
+      window.removeEventListener("keydown", kick);
+      document.removeEventListener("visibilitychange", vis);
+      el.pause();
     };
   }, []);
 
@@ -563,6 +589,7 @@ export function Chat() {
           autoFocus
         />
       </form>
+      <audio ref={noiseRef} src={NOISE} loop preload="auto" />
     </div>
   );
 }
