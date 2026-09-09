@@ -172,6 +172,10 @@ export function Chat() {
   signedRef.current = signedIn;
   cwdRef.current = cwd;
 
+  function host() {
+    return signedRef.current ? "chat" : "anon";
+  }
+
   function sys(body: string) {
     sysN.current += 1;
     setFeed((prev) => [...prev, { id: `sys-${sysN.current}`, sender: "", body }]);
@@ -239,25 +243,49 @@ export function Chat() {
 
   useEffect(() => {
     let stop = false;
-    authClient.getSession().then(async ({ data }) => {
+    void (async () => {
+      const { data } = await authClient.getSession();
       if (stop) return;
-      if (data?.user) {
-        setSignedIn(true);
-        try {
-          const res = await fetch(apiUrl("/api/me"), { credentials: "include" });
-          const me = (await res.json()) as { nick?: string; admin?: boolean; id?: string };
-          if (stop) return;
-          adminRef.current = Boolean(me.admin);
-          meIdRef.current = me.id ?? "";
-          setNick((me.nick || data.user.name || loadGuestName()).slice(0, 24));
-        } catch {
-          if (stop) return;
-          setNick((data.user.name || loadGuestName()).slice(0, 24));
-        }
+      const user = data?.user;
+      if (!user) {
+        setSignedIn(false);
+        setNick(loadGuestName());
         return;
       }
-      setNick(loadGuestName());
-    });
+      setSignedIn(true);
+      meIdRef.current = user.id;
+      let nick = (user.name || loadGuestName()).slice(0, 24);
+      try {
+        const res = await fetch(apiUrl("/api/me"), { credentials: "include" });
+        if (res.ok) {
+          const me = (await res.json()) as {
+            nick?: string;
+            admin?: boolean;
+            id?: string;
+            hasNick?: boolean;
+          };
+          if (stop) return;
+          adminRef.current = Boolean(me.admin);
+          if (me.id) meIdRef.current = me.id;
+          const guest = localStorage.getItem("guest-name")?.trim().slice(0, 24);
+          if (!me.hasNick && guest) {
+            const saved = await fetch(apiUrl("/api/nick"), {
+              method: "POST",
+              credentials: "include",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ nick: guest }),
+            });
+            if (saved.ok) nick = guest;
+            else nick = (me.nick || nick).slice(0, 24);
+          } else {
+            nick = (me.nick || nick).slice(0, 24);
+          }
+        }
+      } catch {
+        /* keep oauth / guest nick */
+      }
+      if (!stop) setNick(nick);
+    })();
     return () => {
       stop = true;
     };
@@ -437,7 +465,7 @@ export function Chat() {
   }
 
   async function run(line: string) {
-    const echo = `${nickRef.current}@chat:${cwdRef.current}$ ${line}`;
+    const echo = `${nickRef.current}@${host()}:${cwdRef.current}$ ${line}`;
     if (!line.startsWith("/")) {
       sys(`${echo}\ntry /help`);
       return;
@@ -635,34 +663,35 @@ export function Chat() {
       return;
     }
     if (cmd === "whoami") {
-      let id = "";
+      const { data } = await authClient.getSession();
+      const user = data?.user;
+      if (!user) {
+        meIdRef.current = "";
+        adminRef.current = false;
+        signedRef.current = false;
+        setSignedIn(false);
+        sys(`${echo}\nnick  ${nickRef.current}\nlogin guest\nid    (sign in with /auth)`);
+        return;
+      }
+      signedRef.current = true;
+      setSignedIn(true);
+      let id = user.id;
       let root = false;
-      let signed = false;
       try {
         const res = await fetch(apiUrl("/api/me"), { credentials: "include" });
         if (res.ok) {
           const me = (await res.json()) as { nick?: string; admin?: boolean; id?: string };
-          signed = true;
-          id = me.id ?? "";
+          if (me.id) id = me.id;
           root = Boolean(me.admin);
-          meIdRef.current = id;
-          adminRef.current = root;
-          signedRef.current = true;
-          setSignedIn(true);
           if (me.nick) setNick(me.nick.slice(0, 24));
-        } else {
-          meIdRef.current = "";
-          adminRef.current = false;
-          signedRef.current = false;
-          setSignedIn(false);
         }
       } catch {
-        /* server offline — fall through as guest */
+        /* session is enough */
       }
+      meIdRef.current = id;
+      adminRef.current = root;
       sys(
-        `${echo}\nnick  ${nickRef.current}\nid    ${
-          signed && id ? id : "(guest — sign in with /auth)"
-        }${root ? "\nuid=0(root)" : ""}`,
+        `${echo}\nnick  ${nickRef.current}\nlogin yes\nid    ${id}${root ? "\nuid=0(root)" : ""}`,
       );
       return;
     }
@@ -961,6 +990,7 @@ export function Chat() {
           hint={hint}
           cwd={cwd}
           promptKind={promptKind}
+          signed={signedIn}
         />
       </div>
       <ol className="sr-only" aria-live="polite">

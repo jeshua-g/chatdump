@@ -100,8 +100,10 @@ export function privateMenu() {
 [2] inv only`;
 }
 
-export function authMenu(signedIn: string | null) {
-  const who = signedIn ? `signed in as ${signedIn}\n\n` : "";
+export function authMenu(nick: string | null) {
+  const who = nick
+    ? `logged in · nick ${nick}\n(id is /whoami, not the nick)\n\n`
+    : `not logged in · guest nick only\n\n`;
   return `ChatDump Authentication
 
 ${who}[1] Google

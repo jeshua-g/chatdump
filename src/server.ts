@@ -91,9 +91,11 @@ app.get("/api/health", (c) => c.json({ ok: true, origin: "vps" }));
 app.get("/api/me", async (c) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   if (!session) return c.json({ error: "unauthorized" }, 401);
-  const nick = db.getNick(session.user.id) || session.user.name?.trim().slice(0, 24) || "";
+  const stored = db.getNick(session.user.id);
+  const nick = stored || session.user.name?.trim().slice(0, 24) || "";
   return c.json({
     nick,
+    hasNick: Boolean(stored),
     name: session.user.name,
     id: session.user.id,
     email: session.user.email,

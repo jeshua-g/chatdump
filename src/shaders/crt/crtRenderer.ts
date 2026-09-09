@@ -20,6 +20,7 @@ export type CrtOptions = {
   hint: string;
   cwd: string;
   promptKind: "shell" | "select" | "password";
+  signed: boolean;
 };
 export const CRT_DEFAULTS: CrtOptions = {
   variant: "terminal",
@@ -38,6 +39,7 @@ export const CRT_DEFAULTS: CrtOptions = {
   hint: "",
   cwd: "~",
   promptKind: "shell",
+  signed: false,
 };
 export const crtStyle = (variant: CrtVariant): CrtStyle => CRT_STYLES[variant] ?? CRT_STYLES.terminal;
 type Segment = { t: string; c: "p" | "d" | "a" | "h" };
@@ -140,7 +142,8 @@ function buildScreen(options: CrtOptions, wrap: number, minRows: number): Segmen
   const nick = (options.nick || "anon").slice(0, 16);
   const path = options.cwd || "~";
   const kind = options.promptKind || "shell";
-  const prefix = kind === "select" ? "Select: " : kind === "password" ? "Password: " : `${nick}@chat:${path}$ `;
+  const host = options.signed ? "chat" : "anon";
+  const prefix = kind === "select" ? "Select: " : kind === "password" ? "Password: " : `${nick}@${host}:${path}$ `;
   const draft = kind === "password" ? "*".repeat((options.draft ?? "").length) : options.draft;
   footer.push(...promptRows(prefix, draft, kind === "shell" ? "a" : "d", wrap));
   const room = Math.max(minRows - header.length - footer.length, 4);
@@ -170,7 +173,7 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
   paper.onload = () => { lastReveal = -1; lastBlink = -1; textDirty = true; };
   const measure = () => { total = log.reduce((n, line) => n + lineLength(line), 0); maxChars = Math.max(cols, ...log.map(lineLength)); };
   const syncFeed = (options: CrtOptions) => {
-    const sig = `${(options.messages ?? []).map((m) => m.id).join("\n")}\0${options.live}\0${options.joined}\0${options.nick}\0${options.draft}\0${options.hint}\0${options.cwd}\0${options.promptKind}\0${cols}`;
+    const sig = `${(options.messages ?? []).map((m) => m.id).join("\n")}\0${options.live}\0${options.joined}\0${options.nick}\0${options.draft}\0${options.hint}\0${options.cwd}\0${options.promptKind}\0${options.signed}\0${cols}`;
     if (sig === feedSig) return;
     log = buildScreen(options, cols, minRows);
     measure();
