@@ -24,7 +24,10 @@ const ORIGINS = (
   .map((s) => s.trim());
 const db = openDb(DATA_DIR);
 
-const sockets = new Map<{ send: (data: string) => void }, { room: string | null; nick: string }>();
+const sockets = new Map<
+  { send: (data: string) => void },
+  { room: string | null; nick: string; userId: string | null }
+>();
 
 function clientIp(c: { req: { header: (n: string) => string | undefined } }) {
   return (
@@ -33,6 +36,33 @@ function clientIp(c: { req: { header: (n: string) => string | undefined } }) {
     c.req.header("x-real-ip") ??
     "local"
   );
+}
+
+function publishChat(roomId: string, sender: string, text: string, guestIp: string | null) {
+  const who = sender.trim().slice(0, 24);
+  const body = text.trim().slice(0, 2000);
+  if (!who || !body) return { ok: false as const, error: "sender and body required" };
+  if (!db.hasRoom(roomId)) return { ok: false as const, error: "no such room" };
+  let left = -1;
+  if (guestIp) {
+    const quota = db.consumeGuest(guestIp);
+    if (!quota.ok) {
+      if (quota.reason === "cooldown") return { ok: false as const, error: "slow down" };
+      const mins = Math.ceil(quota.retryAfterMs / 60000);
+      return { ok: false as const, error: `guest limit: wait ${mins} min` };
+    }
+    left = quota.left;
+  }
+  const msg: Message = {
+    id: crypto.randomUUID(),
+    roomId,
+    sender: who,
+    body,
+    createdAt: Date.now(),
+  };
+  db.add(msg);
+  broadcast(msg);
+  return { ok: true as const, message: msg, left };
 }
 
 function broadcast(msg: Message) {
@@ -187,7 +217,7 @@ app.post("/api/sudo", async (c) => {
         sockets.delete(ws);
         continue;
       }
-      sockets.set(ws, { room: null, nick: meta.nick });
+      sockets.set(ws, { room: null, nick: meta.nick, userId: meta.userId });
     }
     return c.json({ ok: true });
   }
@@ -204,7 +234,7 @@ app.post("/api/sudo", async (c) => {
         sockets.delete(ws);
         continue;
       }
-      sockets.set(ws, { room: null, nick: meta.nick });
+      sockets.set(ws, { room: null, nick: meta.nick, userId: meta.userId });
       n += 1;
     }
     presence(room);
@@ -274,76 +304,50 @@ app.post("/api/rooms/:id/invite", async (c) => {
 app.get("/api/messages", (c) => c.json({ messages: db.history(GUEST_ROOM) }));
 
 app.post("/api/messages", async (c) => {
-  const start = performance.now();
   let body: { sender?: string; body?: string; room?: string; password?: string; token?: string };
   try {
     body = await c.req.json();
   } catch {
     return c.json({ error: "invalid json" }, 400);
   }
-  console.log(`[API] JSON parsed: ${(performance.now() - start).toFixed(1)}ms`);
-
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   const sender = ((session ? db.getNick(session.user.id) || session.user.name : body.sender) || "")
     .trim()
     .slice(0, 24);
-  const text = (body.body ?? "").trim().slice(0, 2000);
   const roomId = (body.room ?? "").trim().toLowerCase();
-  if (!sender || !text) return c.json({ error: "sender and body required" }, 400);
   const enter = db.canEnter(roomId, session?.user.id ?? null, body.password, body.token);
   if (!enter.ok) {
     if (enter.reason === "missing") return c.json({ error: "no such room" }, 404);
     return c.json({ error: "permission denied" }, 403);
   }
-
-  let left = -1;
-  if (!session) {
-    const quotaStart = performance.now();
-    const quota = db.consumeGuest(clientIp(c));
-    console.log(`[API] quota: ${(performance.now() - quotaStart).toFixed(1)}ms`);
-    if (!quota.ok) {
-      if (quota.reason === "cooldown") {
-        return c.json({ error: "slow down", retryAfterMs: quota.retryAfterMs }, 429);
-      }
-      const mins = Math.ceil(quota.retryAfterMs / 60000);
-      return c.json(
-        { error: `guest limit: wait ${mins} min`, retryAfterMs: quota.retryAfterMs },
-        429,
-      );
-    }
-    left = quota.left;
+  const result = publishChat(roomId, sender, body.body ?? "", session ? null : clientIp(c));
+  if (!result.ok) {
+    const status = result.error === "slow down" || result.error.startsWith("guest limit") ? 429 : 400;
+    return c.json({ error: result.error }, status);
   }
-
-  const msg: Message = {
-    id: crypto.randomUUID(),
-    roomId,
-    sender,
-    body: text,
-    createdAt: Date.now(),
-  };
-  const dbStart = performance.now();
-  db.add(msg);
-  console.log(`[API] db.add: ${(performance.now() - dbStart).toFixed(1)}ms`);
-
-  const broadcastStart = performance.now();
-  broadcast(msg);
-  console.log(`[API] broadcast: ${(performance.now() - broadcastStart).toFixed(1)}ms`);
-  console.log(`[API] total: ${(performance.now() - start).toFixed(1)}ms`);
-  return c.json({ message: msg, left }, 201);
+  return c.json({ message: result.message, left: result.left }, 201);
 });
 
 app.get(
   "/ws",
   upgradeWebSocket((c) => {
     const headers = c.req.raw.headers;
+    const ip = clientIp(c);
     return {
       onOpen(_evt, ws) {
-        sockets.set(ws, { room: null, nick: "" });
+        sockets.set(ws, { room: null, nick: "", userId: null });
         console.log(`[WS] connected (active: ${sockets.size})`);
       },
       onMessage(evt, ws) {
         void (async () => {
-          let data: { type?: string; room?: string; password?: string; nick?: string; token?: string };
+          let data: {
+            type?: string;
+            room?: string;
+            password?: string;
+            nick?: string;
+            token?: string;
+            body?: string;
+          };
           try {
             data = JSON.parse(String(evt.data)) as {
               type?: string;
@@ -351,18 +355,19 @@ app.get(
               password?: string;
               nick?: string;
               token?: string;
+              body?: string;
             };
           } catch {
             return;
           }
           if (data.type === "leave") {
             const prev = sockets.get(ws);
-            sockets.set(ws, { room: null, nick: prev?.nick ?? "" });
+            sockets.set(ws, { room: null, nick: prev?.nick ?? "", userId: prev?.userId ?? null });
             presence(prev?.room ?? null);
             return;
           }
           if (data.type === "nick") {
-            const prev = sockets.get(ws) ?? { room: null, nick: "" };
+            const prev = sockets.get(ws) ?? { room: null, nick: "", userId: null };
             prev.nick = (data.nick ?? "").trim().slice(0, 24);
             sockets.set(ws, prev);
             presence(prev.room);
@@ -371,6 +376,22 @@ app.get(
           if (data.type === "who") {
             const prev = sockets.get(ws);
             ws.send(JSON.stringify({ type: "presence", names: prev?.room ? namesIn(prev.room) : [] }));
+            return;
+          }
+          if (data.type === "send") {
+            const prev = sockets.get(ws);
+            if (!prev?.room) {
+              ws.send(JSON.stringify({ type: "nack", error: "not in a room", body: data.body }));
+              return;
+            }
+            const sender = (
+              (prev.userId ? db.getNick(prev.userId) : null) ||
+              prev.nick
+            ).trim();
+            const result = publishChat(prev.room, sender, data.body ?? "", prev.userId ? null : ip);
+            if (!result.ok) {
+              ws.send(JSON.stringify({ type: "nack", error: result.error, body: data.body }));
+            }
             return;
           }
           if (data.type !== "join") return;
@@ -396,7 +417,7 @@ app.get(
           }
           const prev = sockets.get(ws);
           const nick = (data.nick ?? prev?.nick ?? "").trim().slice(0, 24);
-          sockets.set(ws, { room, nick });
+          sockets.set(ws, { room, nick, userId: session?.user.id ?? prev?.userId ?? null });
           if (prev?.room && prev.room !== room) presence(prev.room);
           ws.send(JSON.stringify({ type: "history", messages: db.history(room) }));
           presence(room);

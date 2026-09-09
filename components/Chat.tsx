@@ -344,13 +344,19 @@ export function Chat() {
           | { type: "auth"; mode: string }
           | { type: "presence"; names: string[] }
           | { type: "kicked"; reason?: string }
-          | { type: "sys"; body: string };
+          | { type: "sys"; body: string }
+          | { type: "nack"; error?: string; body?: string };
         if (data.type === "presence") {
           presenceRef.current = data.names;
           return;
         }
         if (data.type === "sys") {
           sys(data.body);
+          return;
+        }
+        if (data.type === "nack") {
+          setHint(data.error ?? "send failed");
+          if (data.body) setText(data.body);
           return;
         }
         if (data.type === "kicked") {
@@ -1034,30 +1040,13 @@ export function Chat() {
       await run(body);
       return;
     }
-    try {
-      const room = roomRef.current;
-      const res = await fetch(apiUrl("/api/messages"), {
-        method: "POST",
-        credentials: "include",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sender: nick,
-          body,
-          room,
-          password: passRef.current[room],
-          token: tokenRef.current[room],
-        }),
-      });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        setHint(err.error ?? "send failed");
-        setText(body);
-      }
-    } catch (err) {
-      console.error("[API] /api/messages failed:", err);
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
       setHint("server offline");
       setText(body);
+      return;
     }
+    ws.send(JSON.stringify({ type: "send", body }));
   }
 
   const promptPrefix =
