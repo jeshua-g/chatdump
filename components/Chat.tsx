@@ -449,6 +449,10 @@ export function Chat() {
   }, [feed, text, hint, skin]);
 
   useEffect(() => {
+    inputRef.current?.focus();
+  }, [skin, promptKind]);
+
+  useEffect(() => {
     const el = noiseRef.current;
     if (!el) return;
     const kick = () => {
@@ -1131,7 +1135,6 @@ export function Chat() {
           spellCheck={false}
           type={promptKind === "password" ? "password" : "text"}
           aria-label="Command"
-          required
           autoFocus
         />
       </form>

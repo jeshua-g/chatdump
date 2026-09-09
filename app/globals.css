@@ -50,7 +50,6 @@ body {
   inset: 0;
   z-index: 1;
   margin: 0;
-  pointer-events: none;
 }
 
 .ghost input {
@@ -64,6 +63,11 @@ body {
   color: transparent;
   caret-color: transparent;
   font-size: 16px;
+}
+
+.skin-min .ghost {
+  inset: auto 0 0 0;
+  height: 3rem;
 }
 
 html.skin-min,
