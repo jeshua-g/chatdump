@@ -4,7 +4,7 @@ import { getMigrations } from "better-auth/db/migration";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { join } from "node:path";
-import { auth } from "./auth.ts";
+import { auth, isOwner } from "./auth.ts";
 import {
   GUEST_COOLDOWN_MS,
   GUEST_LIMIT,
@@ -92,7 +92,13 @@ app.get("/api/me", async (c) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   if (!session) return c.json({ error: "unauthorized" }, 401);
   const nick = db.getNick(session.user.id) || session.user.name?.trim().slice(0, 24) || "";
-  return c.json({ nick, name: session.user.name });
+  return c.json({
+    nick,
+    name: session.user.name,
+    id: session.user.id,
+    email: session.user.email,
+    admin: isOwner(session.user),
+  });
 });
 
 app.post("/api/nick", async (c) => {
@@ -150,6 +156,73 @@ app.get("/api/my-rooms", async (c) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   if (!session) return c.json({ error: "unauthorized" }, 401);
   return c.json({ rooms: db.listMine(session.user.id) });
+});
+
+app.post("/api/sudo", async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session || !isOwner(session.user)) return c.json({ error: "permission denied" }, 403);
+  let body: { cmd?: string; arg?: string; room?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid json" }, 400);
+  }
+  const cmd = (body.cmd ?? "").trim();
+  const arg = (body.arg ?? "").trim();
+  if (cmd === "rmdir") {
+    const id = (arg || body.room || "").toLowerCase();
+    const result = db.deleteRoom(id, session.user.id, true);
+    if (!result.ok) {
+      if (result.reason === "missing") return c.json({ error: "no such room" }, 404);
+      return c.json({ error: "permission denied" }, 403);
+    }
+    const payload = JSON.stringify({ type: "kicked", reason: `room ${id} removed` });
+    for (const [ws, meta] of sockets) {
+      if (meta.room !== id) continue;
+      try {
+        ws.send(payload);
+      } catch {
+        sockets.delete(ws);
+        continue;
+      }
+      sockets.set(ws, { room: null, nick: meta.nick });
+    }
+    return c.json({ ok: true });
+  }
+  if (cmd === "kick") {
+    const room = (body.room ?? "").trim().toLowerCase();
+    if (!room || !arg) return c.json({ error: "usage" }, 400);
+    let n = 0;
+    const payload = JSON.stringify({ type: "kicked", reason: "kicked" });
+    for (const [ws, meta] of sockets) {
+      if (meta.room !== room || meta.nick !== arg) continue;
+      try {
+        ws.send(payload);
+      } catch {
+        sockets.delete(ws);
+        continue;
+      }
+      sockets.set(ws, { room: null, nick: meta.nick });
+      n += 1;
+    }
+    presence(room);
+    return c.json({ ok: true, kicked: n });
+  }
+  if (cmd === "wall") {
+    const room = (body.room ?? "").trim().toLowerCase();
+    if (!room || !arg) return c.json({ error: "usage" }, 400);
+    const payload = JSON.stringify({ type: "sys", body: arg });
+    for (const [ws, meta] of sockets) {
+      if (meta.room !== room) continue;
+      try {
+        ws.send(payload);
+      } catch {
+        sockets.delete(ws);
+      }
+    }
+    return c.json({ ok: true });
+  }
+  return c.json({ error: "unknown command" }, 400);
 });
 
 app.post("/api/rooms/:id/delete", async (c) => {

@@ -33,6 +33,12 @@ const google =
       }
     : undefined;
 
+export function isOwner(user: { id: string; email?: string | null }) {
+  const id = process.env.OWNER_ID;
+  const email = process.env.OWNER_EMAIL?.trim().toLowerCase();
+  return (Boolean(id) && user.id === id) || (Boolean(email) && user.email?.toLowerCase() === email);
+}
+
 export const auth = betterAuth({
   secret: process.env.BETTER_AUTH_SECRET,
   baseURL: authUrl,

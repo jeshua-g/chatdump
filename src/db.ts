@@ -256,11 +256,11 @@ export function openDb(dataDir: string) {
       return myRoomsStmt.all(userId, userId) as { id: string; access: string; role: string }[];
     },
 
-    deleteRoom(id: string, actorId: string) {
+    deleteRoom(id: string, actorId: string, force = false) {
       if (id === GUEST_ROOM) return { ok: false as const, reason: "denied" as const };
       const room = this.getRoom(id);
       if (!room) return { ok: false as const, reason: "missing" as const };
-      if (room.ownerId !== actorId) return { ok: false as const, reason: "denied" as const };
+      if (!force && room.ownerId !== actorId) return { ok: false as const, reason: "denied" as const };
       deleteMsgs.run(id);
       deleteInvites.run(id);
       deleteRoomStmt.run(id);

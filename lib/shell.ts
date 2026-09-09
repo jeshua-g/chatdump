@@ -32,6 +32,23 @@ export const HELP = `# Rooms
 /mute               Mute/unmute microphone
 /deafen             Deafen/undeafen yourself`;
 
+const SUDO = `
+# Root
+/sudo rmdir <room>  Delete any room
+/sudo kick <nick>   Kick from this room
+/sudo wall <text>   Broadcast in this room`;
+
+const SUDO_NARROW = `
+# Root
+/sudo rmdir <room>
+/sudo kick <nick>
+/sudo wall <text>`;
+
+export function helpText(narrow: boolean, admin: boolean) {
+  const base = narrow ? HELP_NARROW : HELP;
+  return admin ? `${base}${narrow ? SUDO_NARROW : SUDO}` : base;
+}
+
 export const HELP_NARROW = `# Rooms
 /ls  list rooms
 /rooms  rooms + info

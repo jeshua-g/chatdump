@@ -2,7 +2,7 @@
 
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { authClient } from "@/lib/auth-client";
-import { HELP, HELP_NARROW, authMenu, parseRoomId, parseSsh, privateMenu } from "@/lib/shell";
+import { authMenu, helpText, parseRoomId, parseSsh, privateMenu } from "@/lib/shell";
 import { CrtBackground } from "@/src/shaders/crt/CrtBackground";
 import type { CrtChatLine } from "@/src/shaders/crt/crtRenderer";
 
@@ -162,6 +162,8 @@ export function Chat() {
   const wsRef = useRef<WebSocket | undefined>(undefined);
   const nickRef = useRef("");
   const signedRef = useRef(false);
+  const adminRef = useRef(false);
+  const meIdRef = useRef("");
   const cwdRef = useRef("~");
   const sysN = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -243,8 +245,10 @@ export function Chat() {
         setSignedIn(true);
         try {
           const res = await fetch(apiUrl("/api/me"), { credentials: "include" });
-          const me = (await res.json()) as { nick?: string };
+          const me = (await res.json()) as { nick?: string; admin?: boolean; id?: string };
           if (stop) return;
+          adminRef.current = Boolean(me.admin);
+          meIdRef.current = me.id ?? "";
           setNick((me.nick || data.user.name || loadGuestName()).slice(0, 24));
         } catch {
           if (stop) return;
@@ -282,9 +286,32 @@ export function Chat() {
           | { type: "message"; message: Message }
           | { type: "error"; error: string }
           | { type: "auth"; mode: string }
-          | { type: "presence"; names: string[] };
+          | { type: "presence"; names: string[] }
+          | { type: "kicked"; reason?: string }
+          | { type: "sys"; body: string };
         if (data.type === "presence") {
           presenceRef.current = data.names;
+          return;
+        }
+        if (data.type === "sys") {
+          sys(data.body);
+          return;
+        }
+        if (data.type === "kicked") {
+          roomRef.current = null;
+          pendingJoin.current = null;
+          gateRef.current = null;
+          inbox.current = [];
+          presenceRef.current = [];
+          setPromptKind("shell");
+          setCwd("~");
+          setFeed([
+            {
+              id: `sys-${++sysN.current}`,
+              sender: "",
+              body: data.reason ?? "kicked",
+            },
+          ]);
           return;
         }
         if (data.type === "auth") {
@@ -422,7 +449,9 @@ export function Chat() {
       return;
     }
     if (cmd === "help") {
-      sys(`${echo}\n${window.matchMedia("(max-width: 720px)").matches ? HELP_NARROW : HELP}`);
+      sys(
+        `${echo}\n${helpText(window.matchMedia("(max-width: 720px)").matches, adminRef.current)}`,
+      );
       return;
     }
     if (cmd === "noise") {
@@ -606,7 +635,92 @@ export function Chat() {
       return;
     }
     if (cmd === "whoami") {
-      sys(`${echo}\n${nickRef.current}`);
+      let id = meIdRef.current;
+      let root = adminRef.current;
+      if (signedRef.current) {
+        try {
+          const res = await fetch(apiUrl("/api/me"), { credentials: "include" });
+          if (res.ok) {
+            const me = (await res.json()) as { nick?: string; admin?: boolean; id?: string };
+            id = me.id ?? id;
+            root = Boolean(me.admin);
+            meIdRef.current = id;
+            adminRef.current = root;
+          }
+        } catch {
+          /* keep cached */
+        }
+      }
+      sys(
+        `${echo}\nnick  ${nickRef.current}\nid    ${id || "(guest — sign in with /auth)"}${
+          root ? "\nuid=0(root)" : ""
+        }`,
+      );
+      return;
+    }
+    if (cmd === "sudo") {
+      if (!adminRef.current) {
+        sys(`${echo}\nsudo: permission denied`);
+        return;
+      }
+      const sub = rest[0] ?? "";
+      const sudoArg = rest.slice(1).join(" ").trim();
+      if (!sub || sub === "help") {
+        sys(`${echo}\nusage: /sudo rmdir <room>\n       /sudo kick <nick>\n       /sudo wall <text>`);
+        return;
+      }
+      if ((sub === "kick" || sub === "wall") && !roomRef.current) {
+        sys(`${echo}\nnot in a room`);
+        return;
+      }
+      if ((sub === "kick" || sub === "wall") && !sudoArg) {
+        sys(`${echo}\nusage: /sudo ${sub} ${sub === "kick" ? "<nick>" : "<text>"}`);
+        return;
+      }
+      try {
+        const res = await fetch(apiUrl("/api/sudo"), {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            cmd: sub,
+            arg: sudoArg,
+            room: roomRef.current,
+          }),
+        });
+        if (res.status === 403) {
+          sys(`${echo}\nsudo: permission denied`);
+          return;
+        }
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          sys(`${echo}\nsudo: ${err.error ?? "failed"}`);
+          return;
+        }
+        if (sub === "rmdir") {
+          const id = sudoArg || roomRef.current;
+          if (roomRef.current && roomRef.current === id) {
+            roomRef.current = null;
+            inbox.current = [];
+            presenceRef.current = [];
+            setCwd("~");
+            setFeed([
+              { id: `sys-${++sysN.current}`, sender: "", body: `${echo}\nremoved ${id}` },
+            ]);
+          } else {
+            sys(`${echo}\nremoved ${id}`);
+          }
+          return;
+        }
+        if (sub === "kick") {
+          const data = (await res.json()) as { kicked?: number };
+          sys(`${echo}\n${data.kicked ? `kicked ${sudoArg}` : `sudo: ${sudoArg}: not in room`}`);
+          return;
+        }
+        sys(`${echo}\nok`);
+      } catch {
+        sys(`${echo}\nserver offline`);
+      }
       return;
     }
     if (cmd === "nick") {
@@ -636,6 +750,8 @@ export function Chat() {
     if (cmd === "logout") {
       await authClient.signOut();
       setSignedIn(false);
+      adminRef.current = false;
+      meIdRef.current = "";
       const guest = loadGuestName();
       setNick(guest);
       wsRef.current?.send(JSON.stringify({ type: "nick", nick: guest }));
