@@ -53,34 +53,47 @@ function rowsFor(cssWidth: number) {
   if (cssWidth < 720) return 16;
   return 19;
 }
-function wrapBody(text: string, wrap: number) {
+function wrapWords(text: string, wrap: number) {
   const out: string[] = [];
-  for (const para of text.replace(/\s+/g, " ").trim().split("\n")) {
-    let rest = para;
-    if (!rest) { out.push(""); continue; }
-    while (rest.length > wrap) {
-      out.push(rest.slice(0, wrap));
-      rest = rest.slice(wrap);
-    }
-    out.push(rest);
-  }
-  return out.length ? out : [""];
-}
-function wrapLines(text: string, wrap: number) {
-  const out: string[] = [];
-  for (const para of text.split("\n")) {
-    let rest = para;
-    if (!rest) {
+  for (const raw of text.split("\n")) {
+    let para = raw;
+    if (!para) {
       out.push("");
       continue;
     }
-    while (rest.length > wrap) {
-      out.push(rest.slice(0, wrap));
-      rest = rest.slice(wrap);
+    if (para.length > wrap) para = para.replace(/ {2,}/g, " ");
+    const words = para.split(" ");
+    let line = "";
+    for (const word of words) {
+      if (!word) continue;
+      if (!line) {
+        if (word.length <= wrap) {
+          line = word;
+          continue;
+        }
+        for (let i = 0; i < word.length; i += wrap) out.push(word.slice(i, i + wrap));
+        continue;
+      }
+      if (line.length + 1 + word.length <= wrap) {
+        line += ` ${word}`;
+        continue;
+      }
+      out.push(line);
+      if (word.length <= wrap) line = word;
+      else {
+        for (let i = 0; i < word.length; i += wrap) out.push(word.slice(i, i + wrap));
+        line = "";
+      }
     }
-    out.push(rest);
+    if (line) out.push(line);
   }
   return out.length ? out : [""];
+}
+function wrapBody(text: string, wrap: number) {
+  return wrapWords(text.replace(/\s+/g, " ").trim(), wrap);
+}
+function wrapLines(text: string, wrap: number) {
+  return wrapWords(text, wrap);
 }
 function messageRows(messages: CrtChatLine[], wrap: number): Segment[][] {
   const rows: Segment[][] = [];

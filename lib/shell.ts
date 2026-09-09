@@ -27,7 +27,34 @@ export const HELP = `# Rooms
 /mute               Mute/unmute microphone
 /deafen             Deafen/undeafen yourself`;
 
-export function parseSsh(arg: string) {
+export const HELP_NARROW = `# Rooms
+/ls  list rooms
+/rooms  rooms + info
+/mkdir <room>
+/mkdir <room> private
+/inv <name>
+/ssh user@room
+/exit  leave room
+/pwd  current room
+
+# Identity
+/whoami
+/nick <name>
+/auth  login
+/passwd
+/logout
+
+# People
+/who  in this room
+
+# Chat
+/clear
+/help
+
+# Voice
+/voice
+/mute
+/deafen`;
   const at = arg.lastIndexOf("@");
   if (at === -1) return { user: "", room: arg };
   return { user: arg.slice(0, at), room: arg.slice(at + 1) };

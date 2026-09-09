@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { authClient } from "@/lib/auth-client";
-import { HELP, authMenu, parseRoomId, parseSsh, privateMenu } from "@/lib/shell";
+import { HELP, HELP_NARROW, authMenu, parseRoomId, parseSsh, privateMenu } from "@/lib/shell";
 import { CrtBackground } from "@/src/shaders/crt/CrtBackground";
 import type { CrtChatLine } from "@/src/shaders/crt/crtRenderer";
 
@@ -298,7 +298,7 @@ export function Chat() {
       return;
     }
     if (cmd === "help") {
-      sys(`${echo}\n${HELP}`);
+      sys(`${echo}\n${window.matchMedia("(max-width: 720px)").matches ? HELP_NARROW : HELP}`);
       return;
     }
     if (cmd === "ls" || cmd === "rooms") {
@@ -306,10 +306,13 @@ export function Chat() {
         const res = await fetch(apiUrl("/api/rooms"));
         const data = (await res.json()) as { rooms?: { id: string; info: string }[] };
         const list = data.rooms ?? [];
+        const narrow = window.matchMedia("(max-width: 720px)").matches;
         const lines =
           cmd === "ls"
             ? list.map((r) => r.id).join("\n")
-            : list.map((r) => `${r.id.padEnd(16)}${r.info}`).join("\n");
+            : list
+                .map((r) => (narrow ? `${r.id}\n  ${r.info}` : `${r.id.padEnd(16)}${r.info}`))
+                .join("\n");
         sys(`${echo}\n${lines || "no rooms"}`);
       } catch {
         sys(`${echo}\nserver offline`);
