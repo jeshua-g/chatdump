@@ -35,5 +35,32 @@ db.setNick("u1", "Late Lark");
 if (db.getNick("u1") !== "Late Lark") throw new Error("nick did not persist");
 db.setNick("u1", "Moss");
 if (db.getNick("u1") !== "Moss") throw new Error("nick did not update");
+if (!db.hasRoom(GUEST_ROOM)) throw new Error("guest room missing");
+if (db.createRoom("guest", "u1").ok) throw new Error("guest overwrite");
+if (db.createRoom("Bad Name", "u1").ok) throw new Error("bad room allowed");
+const made = db.createRoom("Lounge", "u1");
+if (!made.ok || made.id !== "lounge") throw new Error("room not created");
+if (!db.hasRoom("lounge")) throw new Error("room missing after create");
+if (db.createRoom("lounge", "u2").ok) throw new Error("duplicate room");
+if (
+  db
+    .listRooms()
+    .map((r) => r.id)
+    .join() !== "lounge"
+)
+  throw new Error("list rooms");
+const locked = db.createRoom("secret", "u1", "password", "hunter2");
+if (!locked.ok) throw new Error("password room");
+if (db.canEnter("secret", null).reason !== "password") throw new Error("password required");
+if (!db.canEnter("secret", null, "hunter2").ok) throw new Error("password rejected");
+if (db.canEnter("secret", null, "nope").ok) throw new Error("bad password allowed");
+if (!db.canEnter("secret", "u1").ok) throw new Error("owner locked out");
+const club = db.createRoom("club", "u1", "invite");
+if (!club.ok) throw new Error("invite room");
+if (db.canEnter("club", "u2").ok) throw new Error("stranger entered invite room");
+db.setNick("u2", "Fern");
+if (!db.invite("club", "u1", "Fern").ok) throw new Error("invite failed");
+if (!db.canEnter("club", "u2").ok) throw new Error("invitee blocked");
+if (db.invite("club", "u2", "Moss").reason !== "denied") throw new Error("non-owner invited");
 rmSync(dir, { recursive: true });
 console.log("ok");

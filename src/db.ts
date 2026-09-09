@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 function envInt(name: string, fallback: number) {
   const n = Number(process.env[name]);
@@ -19,6 +20,22 @@ export type Message = {
   body: string;
   createdAt: number;
 };
+
+export type RoomAccess = "public" | "password" | "invite";
+
+function hashPassword(password: string) {
+  const salt = randomBytes(16);
+  const hash = scryptSync(password, salt, 32);
+  return `${salt.toString("hex")}:${hash.toString("hex")}`;
+}
+
+function checkPassword(password: string, stored: string) {
+  const [saltHex, hashHex] = stored.split(":");
+  if (!saltHex || !hashHex) return false;
+  const hash = scryptSync(password, Buffer.from(saltHex, "hex"), 32);
+  const expected = Buffer.from(hashHex, "hex");
+  return hash.length === expected.length && timingSafeEqual(hash, expected);
+}
 
 export function openDb(dataDir: string) {
   mkdirSync(dataDir, { recursive: true });
@@ -47,9 +64,31 @@ export function openDb(dataDir: string) {
       user_id TEXT PRIMARY KEY,
       nick TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS rooms (
+      id TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      access TEXT NOT NULL DEFAULT 'public',
+      password_hash TEXT
+    );
+    CREATE TABLE IF NOT EXISTS invites (
+      room_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      PRIMARY KEY (room_id, user_id)
+    );
   `);
   try {
     db.exec(`ALTER TABLE guest_limits ADD COLUMN last_sent INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    /* already on this schema */
+  }
+  try {
+    db.exec(`ALTER TABLE rooms ADD COLUMN access TEXT NOT NULL DEFAULT 'public'`);
+  } catch {
+    /* already on this schema */
+  }
+  try {
+    db.exec(`ALTER TABLE rooms ADD COLUMN password_hash TEXT`);
   } catch {
     /* already on this schema */
   }
@@ -75,6 +114,20 @@ export function openDb(dataDir: string) {
     `INSERT INTO nicks (user_id, nick) VALUES (?, ?)
      ON CONFLICT(user_id) DO UPDATE SET nick = excluded.nick`,
   );
+  const getRoomStmt = db.prepare(
+    `SELECT id, owner_id, access, COALESCE(password_hash, '') AS password_hash FROM rooms WHERE id = ?`,
+  );
+  const insertRoom = db.prepare(
+    `INSERT INTO rooms (id, owner_id, created_at, access, password_hash) VALUES (?, ?, ?, ?, ?)`,
+  );
+  const listRoomsStmt = db.prepare(
+    `SELECT r.id, r.access, COALESCE(n.nick, '') AS owner
+     FROM rooms r LEFT JOIN nicks n ON n.user_id = r.owner_id
+     ORDER BY r.created_at ASC`,
+  );
+  const findNickStmt = db.prepare(`SELECT user_id FROM nicks WHERE nick = ?`);
+  const isInvitedStmt = db.prepare(`SELECT 1 FROM invites WHERE room_id = ? AND user_id = ?`);
+  const insertInvite = db.prepare(`INSERT OR IGNORE INTO invites (room_id, user_id) VALUES (?, ?)`);
   const expireGuest = db.prepare(`DELETE FROM messages WHERE room_id = ? AND created_at < ?`);
   let lastPrune = 0;
   const PRUNE_INTERVAL_MS = 5 * 60 * 1000;
@@ -117,6 +170,69 @@ export function openDb(dataDir: string) {
       setNickStmt.run(userId, nick);
     },
 
+    hasRoom(id: string) {
+      return id === GUEST_ROOM || Boolean(getRoomStmt.get(id));
+    },
+
+    getRoom(id: string) {
+      if (id === GUEST_ROOM) {
+        return { id, ownerId: "", access: "public" as const, passwordHash: "" };
+      }
+      const row = getRoomStmt.get(id) as
+        { id: string; owner_id: string; access: string; password_hash: string } | undefined;
+      if (!row) return null;
+      return {
+        id: row.id,
+        ownerId: row.owner_id,
+        access: (row.access || "public") as RoomAccess,
+        passwordHash: row.password_hash,
+      };
+    },
+
+    listRooms() {
+      return listRoomsStmt.all() as { id: string; access: string; owner: string }[];
+    },
+
+    canEnter(id: string, userId: string | null, password?: string) {
+      const room = this.getRoom(id);
+      if (!room) return { ok: false as const, reason: "missing" as const };
+      if (room.access === "public") return { ok: true as const };
+      if (userId && userId === room.ownerId) return { ok: true as const };
+      if (room.access === "password") {
+        if (!password) return { ok: false as const, reason: "password" as const };
+        if (!checkPassword(password, room.passwordHash)) {
+          return { ok: false as const, reason: "denied" as const };
+        }
+        return { ok: true as const };
+      }
+      if (userId && isInvitedStmt.get(id, userId)) return { ok: true as const };
+      return { ok: false as const, reason: "denied" as const };
+    },
+
+    createRoom(raw: string, ownerId: string, access: RoomAccess = "public", password?: string) {
+      const id = parseRoomId(raw);
+      if (!id) return { ok: false as const, reason: "invalid" as const };
+      if (access === "password" && !password)
+        return { ok: false as const, reason: "invalid" as const };
+      if (id === GUEST_ROOM) return { ok: false as const, reason: "exists" as const };
+      if (getRoomStmt.get(id)) return { ok: false as const, reason: "exists" as const };
+      const hash = access === "password" && password ? hashPassword(password) : null;
+      insertRoom.run(id, ownerId, Date.now(), access, hash);
+      return { ok: true as const, id };
+    },
+
+    invite(roomId: string, actorId: string, nick: string) {
+      const room = this.getRoom(roomId);
+      if (!room) return { ok: false as const, reason: "missing" as const };
+      if (room.ownerId !== actorId) return { ok: false as const, reason: "denied" as const };
+      if (room.access !== "invite") return { ok: false as const, reason: "not-invite" as const };
+      const rows = findNickStmt.all(nick) as { user_id: string }[];
+      if (!rows.length) return { ok: false as const, reason: "nouser" as const };
+      if (rows.length > 1) return { ok: false as const, reason: "ambiguous" as const };
+      insertInvite.run(roomId, rows[0].user_id);
+      return { ok: true as const };
+    },
+
     consumeGuest(
       ip: string,
       now = Date.now(),
@@ -149,3 +265,9 @@ export function openDb(dataDir: string) {
 
 export const GUEST_ROOM = "guest";
 export { GUEST_LIMIT, GUEST_WINDOW_MS, GUEST_TTL_MS, GUEST_COOLDOWN_MS };
+
+export function parseRoomId(raw: string) {
+  const id = raw.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,23}$/.test(id)) return null;
+  return id;
+}

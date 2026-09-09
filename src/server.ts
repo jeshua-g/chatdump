@@ -24,7 +24,7 @@ const ORIGINS = (
   .map((s) => s.trim());
 const db = openDb(DATA_DIR);
 
-const sockets = new Set<{ send: (data: string) => void }>();
+const sockets = new Map<{ send: (data: string) => void }, string | null>();
 
 function clientIp(c: { req: { header: (n: string) => string | undefined } }) {
   return (
@@ -37,7 +37,8 @@ function clientIp(c: { req: { header: (n: string) => string | undefined } }) {
 
 function broadcast(msg: Message) {
   const payload = JSON.stringify({ type: "message", message: msg });
-  for (const ws of sockets) {
+  for (const [ws, room] of sockets) {
+    if (room !== msg.roomId) continue;
     try {
       ws.send(payload);
     } catch {
@@ -88,11 +89,67 @@ app.post("/api/nick", async (c) => {
   return c.json({ nick });
 });
 
+app.get("/api/rooms", (c) =>
+  c.json({
+    rooms: [
+      { id: GUEST_ROOM, access: "public", info: "public guest room  ·  messages expire ~24h" },
+      ...db.listRooms().map((r) => ({
+        id: r.id,
+        access: r.access,
+        info:
+          r.access === "password"
+            ? "private (password)"
+            : r.access === "invite"
+              ? "private (invite)"
+              : r.owner || "room",
+      })),
+    ],
+  }),
+);
+
+app.post("/api/rooms", async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) return c.json({ error: "unauthorized" }, 401);
+  let body: { id?: string; access?: string; password?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid json" }, 400);
+  }
+  const access = body.access === "password" || body.access === "invite" ? body.access : "public";
+  const made = db.createRoom(body.id ?? "", session.user.id, access, body.password);
+  if (!made.ok) {
+    if (made.reason === "invalid") return c.json({ error: "bad room name" }, 400);
+    return c.json({ error: "file exists" }, 409);
+  }
+  return c.json({ id: made.id, access }, 201);
+});
+
+app.post("/api/rooms/:id/invite", async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) return c.json({ error: "unauthorized" }, 401);
+  let body: { nick?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid json" }, 400);
+  }
+  const nick = (body.nick ?? "").trim();
+  if (!nick) return c.json({ error: "nick required" }, 400);
+  const result = db.invite(c.req.param("id").toLowerCase(), session.user.id, nick);
+  if (!result.ok) {
+    if (result.reason === "nouser") return c.json({ error: "no such user" }, 404);
+    if (result.reason === "not-invite") return c.json({ error: "not an invite room" }, 400);
+    return c.json({ error: "permission denied" }, 403);
+  }
+  return c.json({ ok: true });
+});
+
 app.get("/api/messages", (c) => c.json({ messages: db.history(GUEST_ROOM) }));
 
 app.post("/api/messages", async (c) => {
   const start = performance.now();
-  let body: { sender?: string; body?: string };
+  let body: { sender?: string; body?: string; room?: string; password?: string };
   try {
     body = await c.req.json();
   } catch {
@@ -105,7 +162,13 @@ app.post("/api/messages", async (c) => {
     .trim()
     .slice(0, 24);
   const text = (body.body ?? "").trim().slice(0, 2000);
+  const roomId = (body.room ?? "").trim().toLowerCase();
   if (!sender || !text) return c.json({ error: "sender and body required" }, 400);
+  const enter = db.canEnter(roomId, session?.user.id ?? null, body.password);
+  if (!enter.ok) {
+    if (enter.reason === "missing") return c.json({ error: "no such room" }, 404);
+    return c.json({ error: "permission denied" }, 403);
+  }
 
   let left = -1;
   if (!session) {
@@ -127,7 +190,7 @@ app.post("/api/messages", async (c) => {
 
   const msg: Message = {
     id: crypto.randomUUID(),
-    roomId: GUEST_ROOM,
+    roomId,
     sender,
     body: text,
     createdAt: Date.now(),
@@ -145,21 +208,64 @@ app.post("/api/messages", async (c) => {
 
 app.get(
   "/ws",
-  upgradeWebSocket(() => ({
-    onOpen(_evt, ws) {
-      sockets.add(ws);
-      console.log(`[WS] connected (active: ${sockets.size})`);
-      ws.send(JSON.stringify({ type: "history", messages: db.history(GUEST_ROOM) }));
-    },
-    onClose(_evt, ws) {
-      sockets.delete(ws);
-      console.log(`[WS] disconnected (active: ${sockets.size})`);
-    },
-    onError(evt, ws) {
-      sockets.delete(ws);
-      console.error(`[WS] error (active: ${sockets.size})`, evt);
-    },
-  })),
+  upgradeWebSocket((c) => {
+    const headers = c.req.raw.headers;
+    return {
+      onOpen(_evt, ws) {
+        sockets.set(ws, null);
+        console.log(`[WS] connected (active: ${sockets.size})`);
+      },
+      onMessage(evt, ws) {
+        void (async () => {
+          let data: { type?: string; room?: string; password?: string };
+          try {
+            data = JSON.parse(String(evt.data)) as {
+              type?: string;
+              room?: string;
+              password?: string;
+            };
+          } catch {
+            return;
+          }
+          if (data.type === "leave") {
+            sockets.set(ws, null);
+            return;
+          }
+          if (data.type !== "join") return;
+          const room = (data.room ?? "").trim().toLowerCase();
+          const session = await auth.api.getSession({ headers });
+          const enter = db.canEnter(room, session?.user.id ?? null, data.password);
+          if (!enter.ok) {
+            if (enter.reason === "missing") {
+              ws.send(
+                JSON.stringify({
+                  type: "error",
+                  error: `ssh: could not resolve hostname ${data.room}`,
+                }),
+              );
+              return;
+            }
+            if (enter.reason === "password") {
+              ws.send(JSON.stringify({ type: "auth", mode: "password" }));
+              return;
+            }
+            ws.send(JSON.stringify({ type: "error", error: "permission denied" }));
+            return;
+          }
+          sockets.set(ws, room);
+          ws.send(JSON.stringify({ type: "history", messages: db.history(room) }));
+        })();
+      },
+      onClose(_evt, ws) {
+        sockets.delete(ws);
+        console.log(`[WS] disconnected (active: ${sockets.size})`);
+      },
+      onError(evt, ws) {
+        sockets.delete(ws);
+        console.error(`[WS] error (active: ${sockets.size})`, evt);
+      },
+    };
+  }),
 );
 
 const { runMigrations } = await getMigrations(auth.options);

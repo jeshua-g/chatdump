@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { authClient } from "@/lib/auth-client";
-import { HELP, ROOMS, authMenu, parseSsh } from "@/lib/shell";
+import { HELP, authMenu, parseRoomId, parseSsh, privateMenu } from "@/lib/shell";
 import { CrtBackground } from "@/src/shaders/crt/CrtBackground";
 import type { CrtChatLine } from "@/src/shaders/crt/crtRenderer";
 
@@ -17,6 +17,8 @@ type Message = {
 const CMDS = new Set([
   "ls",
   "rooms",
+  "mkdir",
+  "inv",
   "ssh",
   "exit",
   "pwd",
@@ -96,6 +98,12 @@ function loadGuestName() {
   return name;
 }
 
+type Gate =
+  | { kind: "auth" }
+  | { kind: "mkdir-private"; id: string; echo: string }
+  | { kind: "mkdir-pass"; id: string; echo: string }
+  | { kind: "ssh-pass"; room: string; echo: string };
+
 function asLines(list: Message[]): CrtChatLine[] {
   return list.map((m) => ({ id: m.id, sender: m.sender, body: m.body }));
 }
@@ -107,11 +115,15 @@ export function Chat() {
   const [hint, setHint] = useState("type help");
   const [live, setLive] = useState(false);
   const [cwd, setCwd] = useState("~");
-  const [authSelect, setAuthSelect] = useState(false);
+  const [promptKind, setPromptKind] = useState<"shell" | "select" | "password">("shell");
   const [feed, setFeed] = useState<CrtChatLine[]>([]);
   const seen = useRef(new Set<string>());
   const inbox = useRef<Message[]>([]);
   const roomRef = useRef<string | null>(null);
+  const pendingJoin = useRef<{ room: string; echo: string } | null>(null);
+  const gateRef = useRef<Gate | null>(null);
+  const passRef = useRef<Record<string, string>>({});
+  const wsRef = useRef<WebSocket | undefined>(undefined);
   const nickRef = useRef("");
   const signedRef = useRef(false);
   const cwdRef = useRef("~");
@@ -154,30 +166,66 @@ export function Chat() {
     let stop = false;
     let timer: ReturnType<typeof setTimeout>;
     let ws: WebSocket | undefined;
-    const push = (list: Message[]) => {
-      const fresh: Message[] = [];
-      for (const msg of list) {
-        if (seen.current.has(msg.id)) continue;
-        seen.current.add(msg.id);
-        inbox.current.push(msg);
-        fresh.push(msg);
-      }
-      if (!fresh.length || roomRef.current !== "guest") return;
-      setFeed((prev) => [...prev, ...asLines(fresh)]);
-    };
     const connect = () => {
       if (stop) return;
       ws = new WebSocket(wsUrl());
-      ws.onopen = () => setLive(true);
+      wsRef.current = ws;
+      ws.onopen = () => {
+        setLive(true);
+        if (roomRef.current)
+          ws?.send(
+            JSON.stringify({
+              type: "join",
+              room: roomRef.current,
+              password: passRef.current[roomRef.current],
+            }),
+          );
+      };
       ws.onclose = () => {
         setLive(false);
         if (!stop) timer = setTimeout(connect, 1500);
       };
       ws.onmessage = (ev) => {
         const data = JSON.parse(String(ev.data)) as
-          { type: "history"; messages: Message[] } | { type: "message"; message: Message };
-        if (data.type === "history") push(data.messages);
-        else push([data.message]);
+          | { type: "history"; messages: Message[] }
+          | { type: "message"; message: Message }
+          | { type: "error"; error: string }
+          | { type: "auth"; mode: string };
+        if (data.type === "auth") {
+          const joining = pendingJoin.current;
+          if (joining) {
+            gateRef.current = { kind: "ssh-pass", room: joining.room, echo: joining.echo };
+            setPromptKind("password");
+          }
+          return;
+        }
+        if (data.type === "error") {
+          const joining = pendingJoin.current;
+          pendingJoin.current = null;
+          gateRef.current = null;
+          setPromptKind("shell");
+          sys(joining ? `${joining.echo}\n${data.error}` : data.error);
+          return;
+        }
+        if (data.type === "history") {
+          inbox.current = data.messages;
+          seen.current = new Set(data.messages.map((m) => m.id));
+          const joining = pendingJoin.current;
+          if (joining) {
+            roomRef.current = joining.room;
+            pendingJoin.current = null;
+            gateRef.current = null;
+            setPromptKind("shell");
+            setCwd(`~/${joining.room}`);
+          }
+          if (roomRef.current) setFeed(asLines(data.messages));
+          return;
+        }
+        const msg = data.message;
+        if (msg.roomId !== roomRef.current || seen.current.has(msg.id)) return;
+        seen.current.add(msg.id);
+        inbox.current.push(msg);
+        setFeed((prev) => [...prev, { id: msg.id, sender: msg.sender, body: msg.body }]);
       };
     };
     connect();
@@ -203,6 +251,35 @@ export function Chat() {
     setNick(name);
   }
 
+  async function postRoom(
+    id: string,
+    access: "public" | "password" | "invite",
+    echo: string,
+    password?: string,
+  ) {
+    try {
+      const res = await fetch(apiUrl("/api/rooms"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, access, password }),
+      });
+      if (res.status === 409) {
+        sys(`${echo}\nmkdir: ${id}: file exists`);
+        return;
+      }
+      if (!res.ok) {
+        sys(`${echo}\nmkdir: failed`);
+        return;
+      }
+      const label =
+        access === "public" ? id : `${id} (${access === "password" ? "password" : "invite"})`;
+      sys(`${echo}\ncreated ${label}`);
+    } catch {
+      sys(`${echo}\nserver offline`);
+    }
+  }
+
   async function run(line: string) {
     const [cmd, ...rest] = line.split(/\s+/);
     const arg = rest.join(" ").trim();
@@ -215,13 +292,75 @@ export function Chat() {
       sys(`${echo}\n${HELP}`);
       return;
     }
-    if (cmd === "ls") {
-      sys(`${echo}\n${Object.keys(ROOMS).join("\n")}`);
+    if (cmd === "ls" || cmd === "rooms") {
+      try {
+        const res = await fetch(apiUrl("/api/rooms"));
+        const data = (await res.json()) as { rooms?: { id: string; info: string }[] };
+        const list = data.rooms ?? [];
+        const lines =
+          cmd === "ls"
+            ? list.map((r) => r.id).join("\n")
+            : list.map((r) => `${r.id.padEnd(16)}${r.info}`).join("\n");
+        sys(`${echo}\n${lines || "no rooms"}`);
+      } catch {
+        sys(`${echo}\nserver offline`);
+      }
       return;
     }
-    if (cmd === "rooms") {
-      const rows = Object.entries(ROOMS).map(([id, info]) => `${id.padEnd(8)}${info}`);
-      sys(`${echo}\n${rows.join("\n")}`);
+    if (cmd === "mkdir") {
+      if (!signedRef.current) {
+        sys(`${echo}\nmkdir: permission denied`);
+        return;
+      }
+      const name = rest[0] ?? "";
+      const flag = rest[1] ?? "";
+      const id = parseRoomId(name);
+      if (!id || (flag && flag !== "private") || rest.length > 2) {
+        sys(`${echo}\nusage: mkdir <room> [private]`);
+        return;
+      }
+      if (flag === "private") {
+        sys(`${echo}\n${privateMenu()}`);
+        gateRef.current = { kind: "mkdir-private", id, echo };
+        setPromptKind("select");
+        return;
+      }
+      await postRoom(id, "public", echo);
+      return;
+    }
+    if (cmd === "inv") {
+      if (!signedRef.current) {
+        sys(`${echo}\ninv: permission denied`);
+        return;
+      }
+      if (!roomRef.current) {
+        sys(`${echo}\nnot in a room`);
+        return;
+      }
+      if (!arg) {
+        sys(`${echo}\nusage: inv <name>`);
+        return;
+      }
+      try {
+        const res = await fetch(apiUrl(`/api/rooms/${roomRef.current}/invite`), {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ nick: arg }),
+        });
+        if (res.status === 404) {
+          sys(`${echo}\ninv: no such user`);
+          return;
+        }
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          sys(`${echo}\ninv: ${err.error ?? "failed"}`);
+          return;
+        }
+        sys(`${echo}\ninvited ${arg}`);
+      } catch {
+        sys(`${echo}\nserver offline`);
+      }
       return;
     }
     if (cmd === "pwd") {
@@ -248,7 +387,8 @@ export function Chat() {
     }
     if (cmd === "auth") {
       sys(`${echo}\n${authMenu(signedRef.current ? nickRef.current : null)}`);
-      setAuthSelect(true);
+      gateRef.current = { kind: "auth" };
+      setPromptKind("select");
       return;
     }
     if (cmd === "passwd") {
@@ -264,7 +404,7 @@ export function Chat() {
       return;
     }
     if (cmd === "who") {
-      if (roomRef.current !== "guest") {
+      if (!roomRef.current) {
         sys(`${echo}\nnot in a room`);
         return;
       }
@@ -278,17 +418,21 @@ export function Chat() {
         return;
       }
       const { room } = parseSsh(arg);
-      if (!(room in ROOMS)) {
+      const id = parseRoomId(room);
+      if (!id) {
         sys(`${echo}\nssh: could not resolve hostname ${room}`);
         return;
       }
-      if (roomRef.current === room) {
-        sys(`${echo}\nalready in ${room}`);
+      if (roomRef.current === id) {
+        sys(`${echo}\nalready in ${id}`);
         return;
       }
-      roomRef.current = room;
-      setCwd(`~/${room}`);
-      setFeed([...asLines(inbox.current), { id: `sys-${++sysN.current}`, sender: "", body: echo }]);
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        sys(`${echo}\nserver offline`);
+        return;
+      }
+      pendingJoin.current = { room: id, echo };
+      wsRef.current.send(JSON.stringify({ type: "join", room: id, password: passRef.current[id] }));
       return;
     }
     if (cmd === "exit") {
@@ -297,6 +441,11 @@ export function Chat() {
         return;
       }
       roomRef.current = null;
+      pendingJoin.current = null;
+      gateRef.current = null;
+      inbox.current = [];
+      wsRef.current?.send(JSON.stringify({ type: "leave" }));
+      setPromptKind("shell");
       setCwd("~");
       setFeed([{ id: `sys-${++sysN.current}`, sender: "", body: `${echo}\nleft room` }]);
       return;
@@ -314,22 +463,55 @@ export function Chat() {
     if (!body || !nick) return;
     setText("");
     setHint("");
-    if (authSelect) {
-      setAuthSelect(false);
-      if (body === "1" || body === "2") {
-        const provider = body === "1" ? "google" : "github";
-        const { error } = await authClient.signIn.social({
-          provider,
-          callbackURL: location.origin,
-        });
-        if (error) sys(error.message ?? "login failed");
+    const gate = gateRef.current;
+    if (gate) {
+      if (gate.kind === "auth") {
+        gateRef.current = null;
+        setPromptKind("shell");
+        if (body === "1" || body === "2") {
+          const provider = body === "1" ? "google" : "github";
+          const { error } = await authClient.signIn.social({
+            provider,
+            callbackURL: location.origin,
+          });
+          if (error) sys(error.message ?? "login failed");
+          return;
+        }
+        sys("cancelled");
         return;
       }
-      sys("cancelled");
-      return;
+      if (gate.kind === "mkdir-private") {
+        if (body === "1") {
+          gateRef.current = { kind: "mkdir-pass", id: gate.id, echo: gate.echo };
+          setPromptKind("password");
+          return;
+        }
+        gateRef.current = null;
+        setPromptKind("shell");
+        if (body === "2") {
+          await postRoom(gate.id, "invite", gate.echo);
+          return;
+        }
+        sys("cancelled");
+        return;
+      }
+      if (gate.kind === "mkdir-pass") {
+        gateRef.current = null;
+        setPromptKind("shell");
+        await postRoom(gate.id, "password", gate.echo, body);
+        return;
+      }
+      if (gate.kind === "ssh-pass") {
+        passRef.current[gate.room] = body;
+        setPromptKind("shell");
+        gateRef.current = null;
+        pendingJoin.current = { room: gate.room, echo: gate.echo };
+        wsRef.current?.send(JSON.stringify({ type: "join", room: gate.room, password: body }));
+        return;
+      }
     }
     const cmd = body.split(/\s+/)[0] ?? "";
-    if (CMDS.has(cmd) || roomRef.current !== "guest") {
+    if (CMDS.has(cmd) || !roomRef.current) {
       await run(body);
       return;
     }
@@ -338,7 +520,12 @@ export function Chat() {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sender: nick, body }),
+        body: JSON.stringify({
+          sender: nick,
+          body,
+          room: roomRef.current,
+          password: passRef.current[roomRef.current],
+        }),
       });
       if (!res.ok) {
         const err = (await res.json().catch(() => ({}))) as { error?: string };
@@ -371,7 +558,7 @@ export function Chat() {
           draft={text}
           hint={hint}
           cwd={cwd}
-          authSelect={authSelect}
+          promptKind={promptKind}
         />
       </div>
       <ol className="sr-only" aria-live="polite">
@@ -386,6 +573,9 @@ export function Chat() {
           onChange={(e) => setText(e.target.value)}
           maxLength={2000}
           autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          type={promptKind === "password" ? "password" : "text"}
           aria-label="Command"
           required
           autoFocus

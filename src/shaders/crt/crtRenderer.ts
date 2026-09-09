@@ -19,7 +19,7 @@ export type CrtOptions = {
   draft: string;
   hint: string;
   cwd: string;
-  authSelect: boolean;
+  promptKind: "shell" | "select" | "password";
 };
 export const CRT_DEFAULTS: CrtOptions = {
   variant: "terminal",
@@ -37,7 +37,7 @@ export const CRT_DEFAULTS: CrtOptions = {
   draft: "",
   hint: "",
   cwd: "~",
-  authSelect: false,
+  promptKind: "shell",
 };
 export const crtStyle = (variant: CrtVariant): CrtStyle => CRT_STYLES[variant] ?? CRT_STYLES.terminal;
 type Segment = { t: string; c: "p" | "d" | "a" | "h" };
@@ -126,8 +126,10 @@ function buildScreen(options: CrtOptions, wrap: number, minRows: number): Segmen
   if (options.hint) footer.push([segment(options.hint.slice(0, wrap), "a")]);
   const nick = (options.nick || "anon").slice(0, 16);
   const path = options.cwd || "~";
-  const prefix = options.authSelect ? "Select: " : `${nick}@chat:${path}$ `;
-  footer.push(...promptRows(prefix, options.draft, options.authSelect ? "d" : "a", wrap));
+  const kind = options.promptKind || "shell";
+  const prefix = kind === "select" ? "Select: " : kind === "password" ? "Password: " : `${nick}@chat:${path}$ `;
+  const draft = kind === "password" ? "*".repeat((options.draft ?? "").length) : options.draft;
+  footer.push(...promptRows(prefix, draft, kind === "shell" ? "a" : "d", wrap));
   const room = Math.max(minRows - header.length - footer.length, 4);
   const last = (options.messages ?? []).at(-1);
   const sysDump = last && !last.sender ? messageRows([last], wrap) : null;
@@ -152,7 +154,7 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
   let width = 1, height = 1, cssWidth = 1, cssHeight = 1, fontSize = 14, lineHeight = 20, startY = 0, charWidth = 8, caretX = 0, caretY = 0, typed = 0, done = true, textDirty = true, lastTextAt = 0, lastReveal = -1, lastBlink = -1, variant: CrtVariant = "terminal", style = crtStyle(variant), cols = 56, minRows = 19, log = buildScreen(CRT_DEFAULTS, 56, 19), total = 0, maxChars = 1, feedSig = ""; const startedAt = performance.now();
   const measure = () => { total = log.reduce((n, line) => n + lineLength(line), 0); maxChars = Math.max(cols, ...log.map(lineLength)); };
   const syncFeed = (options: CrtOptions) => {
-    const sig = `${(options.messages ?? []).map((m) => m.id).join("\n")}\0${options.live}\0${options.joined}\0${options.nick}\0${options.draft}\0${options.hint}\0${options.cwd}\0${options.authSelect}\0${cols}`;
+    const sig = `${(options.messages ?? []).map((m) => m.id).join("\n")}\0${options.live}\0${options.joined}\0${options.nick}\0${options.draft}\0${options.hint}\0${options.cwd}\0${options.promptKind}\0${cols}`;
     if (sig === feedSig) return;
     log = buildScreen(options, cols, minRows);
     measure();

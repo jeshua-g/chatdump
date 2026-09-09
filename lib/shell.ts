@@ -1,10 +1,9 @@
-export const ROOMS: Record<string, string> = {
-  guest: "public guest room  ·  messages expire ~24h",
-};
-
 export const HELP = `# Rooms
 ls                  List rooms
 rooms               List rooms + info
+mkdir <room>        Create a room (signed in)
+mkdir <room> private  Private room
+inv <name>          Invite a user
 ssh user@room       Connect to a room
 exit                Leave the current room
 pwd                 Show current room
@@ -32,6 +31,17 @@ export function parseSsh(arg: string) {
   const at = arg.lastIndexOf("@");
   if (at === -1) return { user: "", room: arg };
   return { user: arg.slice(0, at), room: arg.slice(at + 1) };
+}
+
+export function parseRoomId(raw: string) {
+  const id = raw.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,23}$/.test(id)) return null;
+  return id;
+}
+
+export function privateMenu() {
+  return `[1] pswd
+[2] inv only`;
 }
 
 export function authMenu(signedIn: string | null) {
