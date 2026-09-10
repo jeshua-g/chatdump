@@ -37,12 +37,25 @@ function checkPassword(password: string, stored: string) {
   return hash.length === expected.length && timingSafeEqual(hash, expected);
 }
 
+type ChatDb = ReturnType<typeof createDb>;
+const dbs = new Map<string, ChatDb>();
+
 export function openDb(dataDir: string) {
   mkdirSync(dataDir, { recursive: true });
-  const db = new DatabaseSync(join(dataDir, "chat.db"));
+  const file = join(dataDir, "chat.db");
+  const existing = dbs.get(file);
+  if (existing) return existing;
+  const api = createDb(file);
+  dbs.set(file, api);
+  return api;
+}
+
+function createDb(file: string) {
+  const db = new DatabaseSync(file);
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
+    PRAGMA busy_timeout = 5000;
   `);
   db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -152,7 +165,46 @@ export function openDb(dataDir: string) {
     expireGuest.run(GUEST_ROOM, now - GUEST_TTL_MS);
   };
 
+  const consumeGuest = (
+    ip: string,
+    now = Date.now(),
+  ):
+    | { ok: true; left: number }
+    | { ok: false; retryAfterMs: number; reason: "cooldown" | "limit" } => {
+    const row = getLimit.get(ip) as
+      | { count: number; window_start: number; last_sent: number }
+      | undefined;
+    if (row && now - row.last_sent < GUEST_COOLDOWN_MS) {
+      return {
+        ok: false,
+        retryAfterMs: GUEST_COOLDOWN_MS - (now - row.last_sent),
+        reason: "cooldown",
+      };
+    }
+    let count = 0;
+    let windowStart = now;
+    if (row && now - row.window_start < GUEST_WINDOW_MS) {
+      count = row.count;
+      windowStart = row.window_start;
+    }
+    if (count >= GUEST_LIMIT) {
+      return { ok: false, retryAfterMs: GUEST_WINDOW_MS - (now - windowStart), reason: "limit" };
+    }
+    upsertLimit.run(ip, count + 1, windowStart, now);
+    return { ok: true, left: GUEST_LIMIT - count - 1 };
+  };
+
+  const rollback = () => {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      /* no active transaction */
+    }
+  };
+
   return {
+    sqlite: db,
+
     history(roomId: string): Message[] {
       pruneGuestIfNeeded();
       const rows = listMsg.all(roomId) as {
@@ -290,32 +342,56 @@ export function openDb(dataDir: string) {
       return { ok: true as const };
     },
 
-    consumeGuest(
-      ip: string,
-      now = Date.now(),
+    consumeGuest,
+
+    publish(
+      roomId: string,
+      who: string,
+      body: string,
+      guestIp: string | null,
     ):
-      | { ok: true; left: number }
-      | { ok: false; retryAfterMs: number; reason: "cooldown" | "limit" } {
-      const row = getLimit.get(ip) as
-        { count: number; window_start: number; last_sent: number } | undefined;
-      if (row && now - row.last_sent < GUEST_COOLDOWN_MS) {
-        return {
-          ok: false,
-          retryAfterMs: GUEST_COOLDOWN_MS - (now - row.last_sent),
-          reason: "cooldown",
+      | { ok: true; message: Message; left: number }
+      | { ok: false; error: string } {
+      db.exec("BEGIN");
+      try {
+        if (roomId !== GUEST_ROOM && !getRoomStmt.get(roomId)) {
+          rollback();
+          return { ok: false, error: "no such room" };
+        }
+        let left = -1;
+        if (guestIp) {
+          const quota = consumeGuest(guestIp);
+          if (!quota.ok) {
+            rollback();
+            if (quota.reason === "cooldown") return { ok: false, error: "slow down" };
+            const mins = Math.ceil(quota.retryAfterMs / 60000);
+            return { ok: false, error: `guest limit: wait ${mins} min` };
+          }
+          left = quota.left;
+        }
+        const msg: Message = {
+          id: crypto.randomUUID(),
+          roomId,
+          sender: who,
+          body,
+          createdAt: Date.now(),
         };
+        insertMsg.run(msg.id, msg.roomId, msg.sender, msg.body, msg.createdAt);
+        db.exec("COMMIT");
+        try {
+          if (msg.roomId === GUEST_ROOM) pruneGuestIfNeeded(msg.createdAt);
+        } catch {
+          /* prune is best-effort after a committed insert */
+        }
+        return { ok: true, message: msg, left };
+      } catch (err) {
+        rollback();
+        const text = err instanceof Error ? err.message : String(err);
+        if (/SQLITE_BUSY|database is locked/i.test(text)) {
+          return { ok: false, error: "busy, try again" };
+        }
+        return { ok: false, error: "send failed" };
       }
-      let count = 0;
-      let windowStart = now;
-      if (row && now - row.window_start < GUEST_WINDOW_MS) {
-        count = row.count;
-        windowStart = row.window_start;
-      }
-      if (count >= GUEST_LIMIT) {
-        return { ok: false, retryAfterMs: GUEST_WINDOW_MS - (now - windowStart), reason: "limit" };
-      }
-      upsertLimit.run(ip, count + 1, windowStart, now);
-      return { ok: true, left: GUEST_LIMIT - count - 1 };
     },
   };
 }

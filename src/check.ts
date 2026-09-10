@@ -81,5 +81,16 @@ if (!extra.ok) throw new Error("force setup");
 if (db.deleteRoom("dropme", "u2").ok) throw new Error("non-owner force skipped");
 if (!db.deleteRoom("dropme", "u2", true).ok) throw new Error("force delete failed");
 if (db.hasRoom("dropme")) throw new Error("force delete lingered");
+const shared = openDb(dir);
+if (shared.sqlite !== db.sqlite) throw new Error("openDb opened a second connection");
+const miss = db.publish("nope", "a", "x", "9.9.9.9");
+if (miss.ok || miss.error !== "no such room") throw new Error("missing room publish");
+const firstPub = db.publish(GUEST_ROOM, "a", "hi", "9.9.9.9");
+if (!firstPub.ok) throw new Error("guest publish failed");
+if (!db.history(GUEST_ROOM).some((m) => m.id === firstPub.message.id)) {
+  throw new Error("committed publish missing from history");
+}
+const cool = db.publish(GUEST_ROOM, "a", "hi2", "9.9.9.9");
+if (cool.ok || cool.error !== "slow down") throw new Error("publish cooldown");
 rmSync(dir, { recursive: true });
 console.log("ok");

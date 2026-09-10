@@ -1,10 +1,8 @@
-import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { betterAuth } from "better-auth";
+import { openDb } from "./db.ts";
 
 const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), "data");
-mkdirSync(DATA_DIR, { recursive: true });
 
 const authUrl = process.env.BETTER_AUTH_URL ?? "http://127.0.0.1:3000";
 const trustedOrigins = (
@@ -43,7 +41,7 @@ export const auth = betterAuth({
   secret: process.env.BETTER_AUTH_SECRET,
   baseURL: authUrl,
   trustedOrigins,
-  database: new DatabaseSync(join(DATA_DIR, "chat.db")),
+  database: openDb(DATA_DIR).sqlite,
   socialProviders: {
     ...(github ? { github } : {}),
     ...(google ? { google } : {}),

@@ -44,27 +44,10 @@ function publishChat(roomId: string, sender: string, text: string, guestIp: stri
   const who = sender.trim().slice(0, 24);
   const body = text.trim().slice(0, 2000);
   if (!who || !body) return { ok: false as const, error: "sender and body required" };
-  if (!db.hasRoom(roomId)) return { ok: false as const, error: "no such room" };
-  let left = -1;
-  if (guestIp) {
-    const quota = db.consumeGuest(guestIp);
-    if (!quota.ok) {
-      if (quota.reason === "cooldown") return { ok: false as const, error: "slow down" };
-      const mins = Math.ceil(quota.retryAfterMs / 60000);
-      return { ok: false as const, error: `guest limit: wait ${mins} min` };
-    }
-    left = quota.left;
-  }
-  const msg: Message = {
-    id: crypto.randomUUID(),
-    roomId,
-    sender: who,
-    body,
-    createdAt: Date.now(),
-  };
-  db.add(msg);
-  broadcast(msg);
-  return { ok: true as const, message: msg, left };
+  const result = db.publish(roomId, who, body, guestIp);
+  if (!result.ok) return result;
+  broadcast(result.message);
+  return result;
 }
 
 function broadcast(msg: Message) {
