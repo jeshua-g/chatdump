@@ -297,7 +297,12 @@ function createDb(file: string) {
       return { ok: false as const, reason: "denied" as const };
     },
 
-    async createRoom(raw: string, ownerId: string, access: RoomAccess = "public", password?: string) {
+    async createRoom(
+      raw: string,
+      ownerId: string,
+      access: RoomAccess = "public",
+      password?: string,
+    ) {
       const id = parseRoomId(raw);
       if (!id) return { ok: false as const, reason: "invalid" as const };
       if (access === "password" && !password)

@@ -481,7 +481,12 @@ app.get(
           if (data.type !== "join") return;
           const room = (data.room ?? "").trim().toLowerCase();
           const session = await auth.api.getSession({ headers });
-          const enter = await db.canEnter(room, session?.user.id ?? null, data.password, data.token);
+          const enter = await db.canEnter(
+            room,
+            session?.user.id ?? null,
+            data.password,
+            data.token,
+          );
           if (!enter.ok) {
             if (enter.reason === "missing") {
               sendOrDrop(
