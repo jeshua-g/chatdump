@@ -1,7 +1,8 @@
 "use client";
 
 import type { CSSProperties, FormEvent, KeyboardEvent, RefObject } from "react";
-import { ArrowUpIcon, HashIcon, HomeIcon } from "lucide-react";
+import { useState } from "react";
+import { ArrowUpIcon, HashIcon, HomeIcon, PanelLeftIcon, PanelRightIcon } from "lucide-react";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
 import { Marker, MarkerContent } from "@/components/ui/marker";
@@ -21,11 +22,12 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
-  SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
 } from "@/components/ui/sidebar";
 import type { CrtChatLine } from "@/src/shaders/crt/crtRenderer";
 
@@ -33,6 +35,48 @@ function note(body: string) {
   const i = body.indexOf("\n");
   if (i > 0 && body.slice(0, i).includes("$ ")) return body.slice(i + 1);
   return body;
+}
+
+function homeNoise(body: string) {
+  const t = note(body).trim();
+  return t === "left room" || t.startsWith("chatdump");
+}
+
+function HomeGuide({
+  nick,
+  rooms,
+  onJoin,
+}: {
+  nick: string;
+  rooms: { id: string }[];
+  onJoin: (id: string) => void;
+}) {
+  const start = rooms.find((r) => r.id === "guest")?.id ?? rooms[0]?.id;
+  return (
+    <div className="mx-auto flex w-full max-w-md flex-col gap-6 px-6 py-12">
+      <div>
+        <h1 className="text-2xl font-medium tracking-tight">Welcome{nick ? `, ${nick}` : ""}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">This is home. Chat lives in a room.</p>
+      </div>
+      <ol className="list-decimal space-y-2 pl-5 text-sm leading-relaxed">
+        <li>Click a room on the left</li>
+        <li>Type a message, press Enter</li>
+        <li>
+          Commands start with <code className="text-foreground">/</code>
+          {" — "}
+          <code className="text-foreground">/help</code>{" "}
+          <code className="text-foreground">/auth</code>{" "}
+          <code className="text-foreground">/nick</code>
+        </li>
+      </ol>
+      {start ? (
+        <Button className="w-fit rounded-full" onClick={() => onJoin(start)}>
+          <HashIcon />
+          Open #{start}
+        </Button>
+      ) : null}
+    </div>
+  );
 }
 
 export function MiniChat({
@@ -70,6 +114,8 @@ export function MiniChat({
   onJoin: (id: string) => void;
   onLeave: () => void;
 }) {
+  const [leftOpen, setLeftOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(true);
   const title = roomLabel === "HOME" ? "Home" : roomLabel;
   const placeholder =
     promptKind === "password"
@@ -77,88 +123,137 @@ export function MiniChat({
       : promptKind === "select"
         ? "1 or 2"
         : lobby
-          ? "Message  ·  /help"
+          ? "Pick a room, or /help"
           : "Message";
+  const railStyle = { "--sidebar-width": "14rem" } as CSSProperties;
 
   return (
-    <SidebarProvider
-      className="h-full min-h-0! w-full"
-      style={{ "--sidebar-width": "14rem" } as CSSProperties}
-    >
-      <Sidebar side="left" collapsible="none" className="max-md:hidden">
-        <SidebarHeader className="border-b border-sidebar-border px-3 py-3">
-          <div className="truncate text-sm font-medium">chatdump</div>
-        </SidebarHeader>
-        <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupLabel>Rooms</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton isActive={lobby} onClick={onLeave}>
-                    <HomeIcon />
-                    <span>home</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                {rooms.map((room) => (
-                  <SidebarMenuItem key={room.id}>
-                    <SidebarMenuButton
-                      isActive={roomLabel === room.id}
-                      onClick={() => onJoin(room.id)}
-                    >
-                      <HashIcon />
-                      <span>{room.id}</span>
+    <div className="flex h-full min-h-0 w-full">
+      <SidebarProvider
+        className="h-full min-h-0! w-auto"
+        style={railStyle}
+        open={leftOpen}
+        onOpenChange={setLeftOpen}
+      >
+        <Sidebar side="left" collapsible="icon">
+          <SidebarHeader className="flex flex-row items-center justify-between gap-2 border-b border-sidebar-border px-2 py-2">
+            <div className="truncate px-1 text-sm font-medium group-data-[collapsible=icon]:hidden">
+              chatdump
+            </div>
+            <SidebarTrigger />
+          </SidebarHeader>
+          <SidebarContent>
+            <SidebarGroup>
+              <SidebarGroupLabel>Rooms</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton isActive={lobby} onClick={onLeave}>
+                      <HomeIcon />
+                      <span>home</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
-      </Sidebar>
-      <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
-        <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium">{title}</div>
-              <div className="truncate text-xs text-muted-foreground">{nick || "anon"}</div>
+                  {rooms.map((room) => (
+                    <SidebarMenuItem key={room.id}>
+                      <SidebarMenuButton
+                        isActive={roomLabel === room.id}
+                        onClick={() => onJoin(room.id)}
+                      >
+                        <HashIcon />
+                        <span>{room.id}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </SidebarContent>
+          <SidebarRail />
+        </Sidebar>
+      </SidebarProvider>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
+          <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+            <div className="flex min-w-0 items-center gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="hidden md:inline-flex"
+                aria-label={leftOpen ? "Collapse rooms" : "Expand rooms"}
+                onClick={() => setLeftOpen((open) => !open)}
+              >
+                <PanelLeftIcon />
+              </Button>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">{title}</div>
+                <div className="truncate text-xs text-muted-foreground">{nick || "anon"}</div>
+              </div>
             </div>
-            <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-              <span className={`size-1.5 rounded-full ${live ? "bg-emerald-400" : "bg-muted-foreground/50"}`} />
-              {live ? "Online" : "Offline"}
-            </span>
+            <div className="flex shrink-0 items-center gap-1">
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className={`size-1.5 rounded-full ${live ? "bg-emerald-400" : "bg-muted-foreground/50"}`} />
+                {live ? "Online" : "Offline"}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="hidden md:inline-flex"
+                aria-label={rightOpen ? "Collapse members" : "Expand members"}
+                onClick={() => setRightOpen((open) => !open)}
+              >
+                <PanelRightIcon />
+              </Button>
+            </div>
           </div>
           <div className="h-0 min-h-0 flex-1">
-            <MessageScrollerProvider autoScroll defaultScrollPosition="end">
-              <MessageScroller>
-                <MessageScrollerViewport className="flex flex-col" aria-live="polite">
-                  <MessageScrollerContent className="mt-auto justify-end gap-3 px-3 py-3">
-                    {feed.map((msg) => (
-                      <MessageScrollerItem key={msg.id} messageId={msg.id}>
-                        {!msg.sender ? (
-                          <Marker>
-                            <MarkerContent className="whitespace-pre-wrap">{note(msg.body)}</MarkerContent>
-                          </Marker>
-                        ) : (
-                          <Message align={msg.sender === nick ? "end" : "start"}>
-                            <MessageContent>
-                              {msg.sender !== nick ? <MessageHeader>{msg.sender}</MessageHeader> : null}
-                              <Bubble
-                                align={msg.sender === nick ? "end" : "start"}
-                                variant={msg.sender === nick ? "default" : "outline"}
-                              >
-                                <BubbleContent className="whitespace-pre-wrap">{msg.body}</BubbleContent>
-                              </Bubble>
-                            </MessageContent>
-                          </Message>
-                        )}
-                      </MessageScrollerItem>
-                    ))}
-                  </MessageScrollerContent>
-                </MessageScrollerViewport>
-                <MessageScrollerButton />
-              </MessageScroller>
-            </MessageScrollerProvider>
+            {lobby ? (
+              <div className="h-full overflow-y-auto">
+                <HomeGuide nick={nick} rooms={rooms} onJoin={onJoin} />
+                {feed.some((msg) => !homeNoise(msg.body)) ? (
+                  <div className="space-y-3 border-t border-border px-6 py-4">
+                    {feed
+                      .filter((msg) => !homeNoise(msg.body))
+                      .map((msg) => (
+                        <Marker key={msg.id}>
+                          <MarkerContent className="whitespace-pre-wrap">{note(msg.body)}</MarkerContent>
+                        </Marker>
+                      ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+                <MessageScroller>
+                  <MessageScrollerViewport className="flex flex-col" aria-live="polite">
+                    <MessageScrollerContent className="mt-auto justify-end gap-3 px-3 py-3">
+                      {feed.map((msg) => (
+                        <MessageScrollerItem key={msg.id} messageId={msg.id}>
+                          {!msg.sender ? (
+                            <Marker>
+                              <MarkerContent className="whitespace-pre-wrap">{note(msg.body)}</MarkerContent>
+                            </Marker>
+                          ) : (
+                            <Message align={msg.sender === nick ? "end" : "start"}>
+                              <MessageContent>
+                                {msg.sender !== nick ? <MessageHeader>{msg.sender}</MessageHeader> : null}
+                                <Bubble
+                                  align={msg.sender === nick ? "end" : "start"}
+                                  variant={msg.sender === nick ? "default" : "outline"}
+                                >
+                                  <BubbleContent className="whitespace-pre-wrap">{msg.body}</BubbleContent>
+                                </Bubble>
+                              </MessageContent>
+                            </Message>
+                          )}
+                        </MessageScrollerItem>
+                      ))}
+                    </MessageScrollerContent>
+                  </MessageScrollerViewport>
+                  <MessageScrollerButton />
+                </MessageScroller>
+              </MessageScrollerProvider>
+            )}
           </div>
           <form
             className="flex items-end gap-2 border-t border-border px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
@@ -192,29 +287,40 @@ export function MiniChat({
               <ArrowUpIcon />
             </Button>
           </form>
-        </div>
-      </SidebarInset>
-      <Sidebar side="right" collapsible="none" className="max-md:hidden">
-        <SidebarHeader className="border-b border-sidebar-border px-3 py-3">
-          <div className="text-sm font-medium">Online — {lobby ? 0 : people.length}</div>
-        </SidebarHeader>
-        <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {(lobby ? [] : people).map((name) => (
-                  <SidebarMenuItem key={name}>
-                    <SidebarMenuButton>
-                      <span className="size-1.5 rounded-full bg-emerald-400" />
-                      <span>{name}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
-      </Sidebar>
-    </SidebarProvider>
+      </div>
+      <SidebarProvider
+        className="h-full min-h-0! w-auto"
+        style={railStyle}
+        open={rightOpen}
+        onOpenChange={setRightOpen}
+        keyboardShortcut={false}
+      >
+        <Sidebar side="right" collapsible="icon">
+          <SidebarHeader className="flex flex-row items-center justify-between gap-2 border-b border-sidebar-border px-2 py-2">
+            <div className="truncate px-1 text-sm font-medium group-data-[collapsible=icon]:hidden">
+              Online — {lobby ? 0 : people.length}
+            </div>
+            <SidebarTrigger />
+          </SidebarHeader>
+          <SidebarContent>
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {(lobby ? [] : people).map((name) => (
+                    <SidebarMenuItem key={name}>
+                      <SidebarMenuButton>
+                        <span className="size-1.5 rounded-full bg-emerald-400" />
+                        <span>{name}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </SidebarContent>
+          <SidebarRail />
+        </Sidebar>
+      </SidebarProvider>
+    </div>
   );
 }
