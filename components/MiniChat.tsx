@@ -71,7 +71,7 @@ function HomeGuide({
       {start ? (
         <Button className="w-fit rounded-full" onClick={() => onJoin(start)}>
           <HashIcon />
-          Open #{start}
+          Open Guest room
         </Button>
       ) : null}
     </div>
