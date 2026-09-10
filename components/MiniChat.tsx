@@ -27,7 +27,6 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarRail,
-  SidebarTrigger,
 } from "@/components/ui/sidebar";
 import type { CrtChatLine } from "@/src/shaders/crt/crtRenderer";
 
@@ -136,11 +135,10 @@ export function MiniChat({
         onOpenChange={setLeftOpen}
       >
         <Sidebar side="left" collapsible="icon">
-          <SidebarHeader className="flex flex-row items-center justify-between gap-2 border-b border-sidebar-border px-2 py-2">
-            <div className="truncate px-1 text-sm font-medium group-data-[collapsible=icon]:hidden">
+          <SidebarHeader className="border-b border-sidebar-border px-3 py-3 group-data-[collapsible=icon]:px-2">
+            <div className="truncate text-sm font-medium group-data-[collapsible=icon]:hidden">
               chatdump
             </div>
-            <SidebarTrigger />
           </SidebarHeader>
           <SidebarContent>
             <SidebarGroup>
@@ -296,11 +294,10 @@ export function MiniChat({
         keyboardShortcut={false}
       >
         <Sidebar side="right" collapsible="icon">
-          <SidebarHeader className="flex flex-row items-center justify-between gap-2 border-b border-sidebar-border px-2 py-2">
-            <div className="truncate px-1 text-sm font-medium group-data-[collapsible=icon]:hidden">
+          <SidebarHeader className="border-b border-sidebar-border px-3 py-3 group-data-[collapsible=icon]:hidden">
+            <div className="truncate text-sm font-medium">
               Online — {lobby ? 0 : people.length}
             </div>
-            <SidebarTrigger />
           </SidebarHeader>
           <SidebarContent>
             <SidebarGroup>
