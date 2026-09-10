@@ -139,9 +139,9 @@ function asLines(list: Message[]): CrtChatLine[] {
 
 function loadSkin(): "crt" | "min" {
   try {
-    return localStorage.getItem("chat-skin") === "min" ? "min" : "crt";
+    return localStorage.getItem("chat-skin") === "crt" ? "crt" : "min";
   } catch {
-    return "crt";
+    return "min";
   }
 }
 
@@ -154,7 +154,9 @@ export function Chat() {
   const [cwd, setCwd] = useState("~");
   const [promptKind, setPromptKind] = useState<"shell" | "select" | "password">("shell");
   const [feed, setFeed] = useState<CrtChatLine[]>([]);
-  const [skin, setSkin] = useState<"crt" | "min">("crt");
+  const [skin, setSkin] = useState<"crt" | "min">("min");
+  const [rooms, setRooms] = useState<{ id: string }[]>([]);
+  const [people, setPeople] = useState<string[]>([]);
   const seen = useRef(new Set<string>());
   const inbox = useRef<Message[]>([]);
   const roomRef = useRef<string | null>(null);
@@ -169,7 +171,7 @@ export function Chat() {
   const mentionI = useRef(-1);
   const urlJoin = useRef<{ room: string; token: string } | null>(null);
   const hissOn = useRef(true);
-  const skinRef = useRef<"crt" | "min">("crt");
+  const skinRef = useRef<"crt" | "min">("min");
   const booted = useRef(false);
   const wsRef = useRef<WebSocket | undefined>(undefined);
   const nickRef = useRef("");
@@ -204,6 +206,35 @@ export function Chat() {
   function sys(body: string) {
     sysN.current += 1;
     setFeed((prev) => [...prev, { id: `sys-${sysN.current}`, sender: "", body }]);
+  }
+
+  function setPresence(names: string[]) {
+    presenceRef.current = names;
+    setPeople(names);
+  }
+
+  function enterRoom(id: string) {
+    if (roomRef.current === id) return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setHint("server offline");
+      return;
+    }
+    pendingJoin.current = { room: id, echo: `join ${id}` };
+    ws.send(JSON.stringify(joinMsg(id)));
+  }
+
+  function leaveRoom() {
+    if (!roomRef.current) return;
+    roomRef.current = null;
+    pendingJoin.current = null;
+    gateRef.current = null;
+    inbox.current = [];
+    setPresence([]);
+    wsRef.current?.send(JSON.stringify({ type: "leave" }));
+    setPromptKind("shell");
+    setCwd("~");
+    setFeed([{ id: `sys-${++sysN.current}`, sender: "", body: "left room" }]);
   }
 
   function joinMsg(room: string) {
@@ -251,6 +282,13 @@ export function Chat() {
     else setHint("");
   }
 
+  function loadRooms() {
+    fetch(apiUrl("/api/rooms"))
+      .then((r) => r.json())
+      .then((d: { rooms?: { id: string }[] }) => setRooms(d.rooms ?? []))
+      .catch(() => {});
+  }
+
   useEffect(() => {
     if (booted.current) return;
     booted.current = true;
@@ -266,6 +304,11 @@ export function Chat() {
     }
     sys(MOTD);
   }, []);
+
+  useEffect(() => {
+    if (skin !== "min") return;
+    loadRooms();
+  }, [skin, live]);
 
   useEffect(() => {
     let stop = false;
@@ -348,7 +391,7 @@ export function Chat() {
           | { type: "sys"; body: string }
           | { type: "nack"; error?: string; body?: string };
         if (data.type === "presence") {
-          presenceRef.current = data.names;
+          setPresence(data.names);
           return;
         }
         if (data.type === "sys") {
@@ -365,7 +408,7 @@ export function Chat() {
           pendingJoin.current = null;
           gateRef.current = null;
           inbox.current = [];
-          presenceRef.current = [];
+          setPresence([]);
           setPromptKind("shell");
           setCwd("~");
           setFeed([
@@ -519,6 +562,7 @@ export function Chat() {
       const extra =
         access === "invite" && made.token ? `\n${inviteUrl(id, made.token)}` : "";
       sys(`${echo}\ncreated ${label}${extra}`);
+      loadRooms();
     } catch {
       sys(`${echo}\nserver offline`);
     }
@@ -641,7 +685,7 @@ export function Chat() {
         if (roomRef.current === id) {
           roomRef.current = null;
           inbox.current = [];
-          presenceRef.current = [];
+          setPresence([]);
           wsRef.current?.send(JSON.stringify({ type: "leave" }));
           setCwd("~");
           setFeed([{ id: `sys-${++sysN.current}`, sender: "", body: `${echo}\nremoved ${id}` }]);
@@ -799,7 +843,7 @@ export function Chat() {
           if (roomRef.current && roomRef.current === id) {
             roomRef.current = null;
             inbox.current = [];
-            presenceRef.current = [];
+            setPresence([]);
             setCwd("~");
             setFeed([
               { id: `sys-${++sysN.current}`, sender: "", body: `${echo}\nremoved ${id}` },
@@ -896,12 +940,7 @@ export function Chat() {
         sys(`${echo}\nalready in ${id}`);
         return;
       }
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-        sys(`${echo}\nserver offline`);
-        return;
-      }
-      pendingJoin.current = { room: id, echo };
-      wsRef.current.send(JSON.stringify(joinMsg(id)));
+      enterRoom(id);
       return;
     }
     if (cmd === "exit") {
@@ -909,15 +948,7 @@ export function Chat() {
         sys(`${echo}\nnot in a room`);
         return;
       }
-      roomRef.current = null;
-      pendingJoin.current = null;
-      gateRef.current = null;
-      inbox.current = [];
-      presenceRef.current = [];
-      wsRef.current?.send(JSON.stringify({ type: "leave" }));
-      setPromptKind("shell");
-      setCwd("~");
-      setFeed([{ id: `sys-${++sysN.current}`, sender: "", body: `${echo}\nleft room` }]);
+      leaveRoom();
       return;
     }
     if (cmd === "voice" || cmd === "mute" || cmd === "deafen") {
@@ -1056,6 +1087,8 @@ export function Chat() {
           nick={nick}
           live={live}
           roomLabel={roomLabel}
+          rooms={rooms}
+          people={people}
           hint={hint}
           value={text}
           promptKind={promptKind}
@@ -1068,6 +1101,8 @@ export function Chat() {
           }}
           onKeyDown={onKey}
           onSubmit={send}
+          onJoin={enterRoom}
+          onLeave={leaveRoom}
         />
       ) : (
         <>
