@@ -80,7 +80,9 @@ function beep() {
 function loadHist(): string[] {
   try {
     const raw = JSON.parse(localStorage.getItem("shell-hist") ?? "[]") as unknown;
-    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string").slice(-50) : [];
+    return Array.isArray(raw)
+      ? raw.filter((x): x is string => typeof x === "string").slice(-50)
+      : [];
   } catch {
     return [];
   }
@@ -305,7 +307,10 @@ export function Chat() {
     const at = value.lastIndexOf("@");
     if (at < 0) return [];
     const prefix = value.slice(at + 1).toLowerCase();
-    if (prefix.includes(" ") && !presenceRef.current.some((n) => n.toLowerCase().startsWith(prefix))) {
+    if (
+      prefix.includes(" ") &&
+      !presenceRef.current.some((n) => n.toLowerCase().startsWith(prefix))
+    ) {
       return [];
     }
     return presenceRef.current.filter(
@@ -406,7 +411,8 @@ export function Chat() {
     const connect = () => {
       if (stop) return;
       clearTimeout(timer);
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING))
+        return;
       ws = new WebSocket(wsUrl());
       wsRef.current = ws;
       ws.onopen = () => {
@@ -439,7 +445,7 @@ export function Chat() {
         }
         if (data.type === "typing:stop") {
           const who = data.nick;
-          if (who) setTypers((prev) => (prev.filter((n) => n !== who)));
+          if (who) setTypers((prev) => prev.filter((n) => n !== who));
           return;
         }
         if (data.type === "presence") {
@@ -627,8 +633,7 @@ export function Chat() {
       const made = (await res.json()) as { token?: string };
       const label =
         access === "public" ? id : `${id} (${access === "password" ? "password" : "invite"})`;
-      const extra =
-        access === "invite" && made.token ? `\n${inviteUrl(id, made.token)}` : "";
+      const extra = access === "invite" && made.token ? `\n${inviteUrl(id, made.token)}` : "";
       sys(`${echo}\ncreated ${label}${extra}`);
       loadRooms();
     } catch {
@@ -694,7 +699,9 @@ export function Chat() {
           sys(`${echo}\nmyrooms: sign in first`);
           return;
         }
-        const data = (await res.json()) as { rooms?: { id: string; access: string; role: string }[] };
+        const data = (await res.json()) as {
+          rooms?: { id: string; access: string; role: string }[];
+        };
         const list = data.rooms ?? [];
         sys(
           `${echo}\n${
@@ -876,7 +883,9 @@ export function Chat() {
       const sub = rest[0] ?? "";
       const sudoArg = rest.slice(1).join(" ").trim();
       if (!sub || sub === "help") {
-        sys(`${echo}\nusage: /sudo rmdir <room>\n       /sudo kick <nick>\n       /sudo wall <text>`);
+        sys(
+          `${echo}\nusage: /sudo rmdir <room>\n       /sudo kick <nick>\n       /sudo wall <text>`,
+        );
         return;
       }
       if ((sub === "kick" || sub === "wall") && !roomRef.current) {
@@ -915,9 +924,7 @@ export function Chat() {
             inbox.current = [];
             setPresence([]);
             setCwd("~");
-            setFeed([
-              { id: `sys-${++sysN.current}`, sender: "", body: `${echo}\nremoved ${id}` },
-            ]);
+            setFeed([{ id: `sys-${++sysN.current}`, sender: "", body: `${echo}\nremoved ${id}` }]);
           } else {
             sys(`${echo}\nremoved ${id}`);
           }
@@ -1045,7 +1052,8 @@ export function Chat() {
       if (!histRef.current.length) return;
       e.preventDefault();
       if (histI.current < 0) stashRef.current = text;
-      histI.current = histI.current < 0 ? histRef.current.length - 1 : Math.max(0, histI.current - 1);
+      histI.current =
+        histI.current < 0 ? histRef.current.length - 1 : Math.max(0, histI.current - 1);
       setText(histRef.current[histI.current] ?? "");
       return;
     }
@@ -1151,7 +1159,10 @@ export function Chat() {
   const roomLabel = cwd === "~" ? "HOME" : cwd.replace(/^~\//, "");
 
   return (
-    <div className={`shell${skin === "min" ? " skin-min" : ""}`} onPointerDown={() => inputRef.current?.focus()}>
+    <div
+      className={`shell${skin === "min" ? " skin-min" : ""}`}
+      onPointerDown={() => inputRef.current?.focus()}
+    >
       {skin === "min" ? (
         <MiniChat
           feed={feed}

@@ -373,7 +373,8 @@ app.post("/api/messages", async (c) => {
   }
   const result = publishChat(roomId, sender, body.body ?? "", session ? null : clientIp(c));
   if (!result.ok) {
-    const status = result.error === "slow down" || result.error.startsWith("guest limit") ? 429 : 400;
+    const status =
+      result.error === "slow down" || result.error.startsWith("guest limit") ? 429 : 400;
     return c.json({ error: result.error }, status);
   }
   return c.json({ message: result.message, left: result.left }, 201);
@@ -427,7 +428,9 @@ app.get(
           }
           if (data.type === "who") {
             const prev = sockets.get(ws);
-            ws.send(JSON.stringify({ type: "presence", names: prev?.room ? namesIn(prev.room) : [] }));
+            ws.send(
+              JSON.stringify({ type: "presence", names: prev?.room ? namesIn(prev.room) : [] }),
+            );
             return;
           }
           if (data.type === "typing:start") {
@@ -445,10 +448,7 @@ app.get(
               return;
             }
             stopTyping(ws);
-            const sender = (
-              (prev.userId ? db.getNick(prev.userId) : null) ||
-              prev.nick
-            ).trim();
+            const sender = ((prev.userId ? db.getNick(prev.userId) : null) || prev.nick).trim();
             const result = publishChat(prev.room, sender, data.body ?? "", prev.userId ? null : ip);
             if (!result.ok) {
               ws.send(JSON.stringify({ type: "nack", error: result.error, body: data.body }));

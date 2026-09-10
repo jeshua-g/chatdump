@@ -260,7 +260,8 @@ export function openDb(dataDir: string) {
       if (id === GUEST_ROOM) return { ok: false as const, reason: "denied" as const };
       const room = this.getRoom(id);
       if (!room) return { ok: false as const, reason: "missing" as const };
-      if (!force && room.ownerId !== actorId) return { ok: false as const, reason: "denied" as const };
+      if (!force && room.ownerId !== actorId)
+        return { ok: false as const, reason: "denied" as const };
       deleteMsgs.run(id);
       deleteInvites.run(id);
       deleteRoomStmt.run(id);
