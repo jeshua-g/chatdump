@@ -38,6 +38,14 @@ function inviteUrl(room: string, token: string) {
   return `${location.origin}/?join=${encodeURIComponent(room)}&t=${encodeURIComponent(token)}`;
 }
 
+function typingLine(names: string[]) {
+  if (!names.length) return "";
+  if (names.length === 1) return `${names[0]} is typing...`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing...`;
+  const extra = names.length - 2;
+  return `${names[0]}, ${names[1]}, and ${extra} other${extra === 1 ? "" : "s"} are typing...`;
+}
+
 function mentioned(body: string, nick: string) {
   const needle = `@${nick.toLowerCase()}`;
   const hay = body.toLowerCase();
@@ -157,6 +165,7 @@ export function Chat() {
   const [skin, setSkin] = useState<"crt" | "min">("min");
   const [rooms, setRooms] = useState<{ id: string }[]>([]);
   const [people, setPeople] = useState<string[]>([]);
+  const [typers, setTypers] = useState<string[]>([]);
   const seen = useRef(new Set<string>());
   const inbox = useRef<Message[]>([]);
   const roomRef = useRef<string | null>(null);
@@ -181,6 +190,8 @@ export function Chat() {
   const cwdRef = useRef("~");
   const sysN = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const typingOn = useRef(false);
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noiseRef = useRef<HTMLAudioElement>(null);
   nickRef.current = nick;
   signedRef.current = signedIn;
@@ -211,6 +222,30 @@ export function Chat() {
   function setPresence(names: string[]) {
     presenceRef.current = names;
     setPeople(names);
+    setTypers((prev) => prev.filter((n) => names.includes(n)));
+  }
+
+  function stopTyping() {
+    if (typingTimer.current) {
+      clearTimeout(typingTimer.current);
+      typingTimer.current = null;
+    }
+    if (!typingOn.current) return;
+    typingOn.current = false;
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "typing:stop" }));
+  }
+
+  function pingTyping() {
+    if (!roomRef.current || promptKind !== "shell") return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!typingOn.current) {
+      typingOn.current = true;
+      ws.send(JSON.stringify({ type: "typing:start" }));
+    }
+    if (typingTimer.current) clearTimeout(typingTimer.current);
+    typingTimer.current = setTimeout(stopTyping, 3000);
   }
 
   function enterRoom(id: string) {
@@ -220,17 +255,20 @@ export function Chat() {
       setHint("server offline");
       return;
     }
+    stopTyping();
     pendingJoin.current = { room: id, echo: `join ${id}` };
     ws.send(JSON.stringify(joinMsg(id)));
   }
 
   function leaveRoom() {
     if (!roomRef.current) return;
+    stopTyping();
     roomRef.current = null;
     pendingJoin.current = null;
     gateRef.current = null;
     inbox.current = [];
     setPresence([]);
+    setTypers([]);
     wsRef.current?.send(JSON.stringify({ type: "leave" }));
     setPromptKind("shell");
     setCwd("~");
@@ -389,7 +427,21 @@ export function Chat() {
           | { type: "presence"; names: string[] }
           | { type: "kicked"; reason?: string }
           | { type: "sys"; body: string }
-          | { type: "nack"; error?: string; body?: string };
+          | { type: "nack"; error?: string; body?: string }
+          | { type: "typing:start"; nick: string }
+          | { type: "typing:stop"; nick: string };
+        if (data.type === "typing:start") {
+          const who = data.nick;
+          if (who && who !== nickRef.current) {
+            setTypers((prev) => (prev.includes(who) ? prev : [...prev, who]));
+          }
+          return;
+        }
+        if (data.type === "typing:stop") {
+          const who = data.nick;
+          if (who) setTypers((prev) => (prev.filter((n) => n !== who)));
+          return;
+        }
         if (data.type === "presence") {
           setPresence(data.names);
           return;
@@ -409,6 +461,12 @@ export function Chat() {
           gateRef.current = null;
           inbox.current = [];
           setPresence([]);
+          setTypers([]);
+          typingOn.current = false;
+          if (typingTimer.current) {
+            clearTimeout(typingTimer.current);
+            typingTimer.current = null;
+          }
           setPromptKind("shell");
           setCwd("~");
           setFeed([
@@ -448,8 +506,10 @@ export function Chat() {
             setCwd(`~/${joining.room}`);
           }
           if (roomRef.current) setFeed(asLines(data.messages));
+          setTypers([]);
           return;
         }
+        if (data.type !== "message") return;
         const msg = data.message;
         if (msg.roomId !== roomRef.current || seen.current.has(msg.id)) return;
         seen.current.add(msg.id);
@@ -481,6 +541,14 @@ export function Chat() {
     return () => {
       stop = true;
       clearTimeout(timer);
+      if (typingTimer.current) {
+        clearTimeout(typingTimer.current);
+        typingTimer.current = null;
+      }
+      if (typingOn.current && ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "typing:stop" }));
+      }
+      typingOn.current = false;
       document.removeEventListener("visibilitychange", wake);
       window.removeEventListener("pageshow", wake);
       ws?.close();
@@ -683,6 +751,7 @@ export function Chat() {
           return;
         }
         if (roomRef.current === id) {
+          stopTyping();
           roomRef.current = null;
           inbox.current = [];
           setPresence([]);
@@ -841,6 +910,7 @@ export function Chat() {
         if (sub === "rmdir") {
           const id = sudoArg || roomRef.current;
           if (roomRef.current && roomRef.current === id) {
+            stopTyping();
             roomRef.current = null;
             inbox.current = [];
             setPresence([]);
@@ -996,6 +1066,7 @@ export function Chat() {
     e.preventDefault();
     const body = text.trim();
     if (!body || !nick) return;
+    stopTyping();
     setText("");
     setHint("");
     histI.current = -1;
@@ -1089,6 +1160,7 @@ export function Chat() {
           roomLabel={roomLabel}
           rooms={rooms}
           people={people}
+          typing={typingLine(typers)}
           hint={hint}
           value={text}
           promptKind={promptKind}
@@ -1098,6 +1170,7 @@ export function Chat() {
             mentionI.current = -1;
             setText(next);
             applyHint(next);
+            pingTyping();
           }}
           onKeyDown={onKey}
           onSubmit={send}
@@ -1122,6 +1195,7 @@ export function Chat() {
               nick={nick}
               draft={text}
               hint={hint}
+              typing={typingLine(typers)}
               cwd={cwd}
               promptKind={promptKind}
               signed={signedIn}
@@ -1143,6 +1217,7 @@ export function Chat() {
               mentionI.current = -1;
               setText(e.target.value);
               applyHint(e.target.value);
+              pingTyping();
             }}
             onKeyDown={onKey}
             maxLength={2000}

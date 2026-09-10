@@ -28,6 +28,8 @@ const sockets = new Map<
   { send: (data: string) => void },
   { room: string | null; nick: string; userId: string | null }
 >();
+type Sock = { send: (data: string) => void };
+const typingTimers = new Map<Sock, ReturnType<typeof setTimeout>>();
 
 function clientIp(c: { req: { header: (n: string) => string | undefined } }) {
   return (
@@ -96,6 +98,55 @@ function presence(room: string | null) {
       sockets.delete(ws);
     }
   }
+}
+
+function displayNick(meta: { nick: string; userId: string | null }) {
+  return ((meta.userId ? db.getNick(meta.userId) : null) || meta.nick).trim().slice(0, 24);
+}
+
+function fanout(room: string, payload: string, except?: Sock) {
+  for (const [ws, meta] of sockets) {
+    if (meta.room !== room || ws === except) continue;
+    try {
+      ws.send(payload);
+    } catch {
+      sockets.delete(ws);
+      const t = typingTimers.get(ws);
+      if (t) clearTimeout(t);
+      typingTimers.delete(ws);
+    }
+  }
+}
+
+function stopTyping(ws: Sock) {
+  const timer = typingTimers.get(ws);
+  if (timer) clearTimeout(timer);
+  typingTimers.delete(ws);
+  if (!timer) return;
+  const meta = sockets.get(ws);
+  const nick = meta ? displayNick(meta) : "";
+  if (!meta?.room || !nick) return;
+  fanout(meta.room, JSON.stringify({ type: "typing:stop", nick }), ws);
+}
+
+function startTyping(ws: Sock) {
+  const meta = sockets.get(ws);
+  const nick = meta ? displayNick(meta) : "";
+  if (!meta?.room || !nick) return;
+  const already = typingTimers.has(ws);
+  const prev = typingTimers.get(ws);
+  if (prev) clearTimeout(prev);
+  typingTimers.set(
+    ws,
+    setTimeout(() => {
+      typingTimers.delete(ws);
+      const cur = sockets.get(ws);
+      const who = cur ? displayNick(cur) : "";
+      if (!cur?.room || !who) return;
+      fanout(cur.room, JSON.stringify({ type: "typing:stop", nick: who }), ws);
+    }, 5000),
+  );
+  if (!already) fanout(meta.room, JSON.stringify({ type: "typing:start", nick }), ws);
 }
 
 const app = new Hono();
@@ -362,6 +413,7 @@ app.get(
           }
           if (data.type === "leave") {
             const prev = sockets.get(ws);
+            stopTyping(ws);
             sockets.set(ws, { room: null, nick: prev?.nick ?? "", userId: prev?.userId ?? null });
             presence(prev?.room ?? null);
             return;
@@ -378,12 +430,21 @@ app.get(
             ws.send(JSON.stringify({ type: "presence", names: prev?.room ? namesIn(prev.room) : [] }));
             return;
           }
+          if (data.type === "typing:start") {
+            startTyping(ws);
+            return;
+          }
+          if (data.type === "typing:stop") {
+            stopTyping(ws);
+            return;
+          }
           if (data.type === "send") {
             const prev = sockets.get(ws);
             if (!prev?.room) {
               ws.send(JSON.stringify({ type: "nack", error: "not in a room", body: data.body }));
               return;
             }
+            stopTyping(ws);
             const sender = (
               (prev.userId ? db.getNick(prev.userId) : null) ||
               prev.nick
@@ -416,6 +477,7 @@ app.get(
             return;
           }
           const prev = sockets.get(ws);
+          stopTyping(ws);
           const nick = (data.nick ?? prev?.nick ?? "").trim().slice(0, 24);
           sockets.set(ws, { room, nick, userId: session?.user.id ?? prev?.userId ?? null });
           if (prev?.room && prev.room !== room) presence(prev.room);
@@ -424,12 +486,14 @@ app.get(
         })();
       },
       onClose(_evt, ws) {
+        stopTyping(ws);
         const prev = sockets.get(ws);
         sockets.delete(ws);
         presence(prev?.room ?? null);
         console.log(`[WS] disconnected (active: ${sockets.size})`);
       },
       onError(evt, ws) {
+        stopTyping(ws);
         const prev = sockets.get(ws);
         sockets.delete(ws);
         presence(prev?.room ?? null);

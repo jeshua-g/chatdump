@@ -18,6 +18,7 @@ export type CrtOptions = {
   nick: string;
   draft: string;
   hint: string;
+  typing: string;
   cwd: string;
   promptKind: "shell" | "select" | "password";
   signed: boolean;
@@ -37,6 +38,7 @@ export const CRT_DEFAULTS: CrtOptions = {
   nick: "",
   draft: "",
   hint: "",
+  typing: "",
   cwd: "~",
   promptKind: "shell",
   signed: false,
@@ -138,6 +140,7 @@ function buildScreen(options: CrtOptions, wrap: number, minRows: number): Segmen
   let body = messageRows(options.messages ?? [], wrap);
   if (!body.length && !options.live) body = [[segment("no carrier", "d")]];
   const footer: Segment[][] = [];
+  if (options.typing) footer.push([segment(options.typing.slice(0, wrap), "a")]);
   if (options.hint) footer.push([segment(options.hint.slice(0, wrap), "a")]);
   const nick = (options.nick || "anon").slice(0, 16);
   const path = options.cwd || "~";
@@ -173,7 +176,7 @@ export function createCrtRenderer(host: HTMLElement, canvas: HTMLCanvasElement, 
   paper.onload = () => { lastReveal = -1; lastBlink = -1; textDirty = true; };
   const measure = () => { total = log.reduce((n, line) => n + lineLength(line), 0); maxChars = Math.max(cols, ...log.map(lineLength)); };
   const syncFeed = (options: CrtOptions) => {
-    const sig = `${(options.messages ?? []).map((m) => m.id).join("\n")}\0${options.live}\0${options.joined}\0${options.nick}\0${options.draft}\0${options.hint}\0${options.cwd}\0${options.promptKind}\0${options.signed}\0${cols}`;
+    const sig = `${(options.messages ?? []).map((m) => m.id).join("\n")}\0${options.live}\0${options.joined}\0${options.nick}\0${options.draft}\0${options.hint}\0${options.typing}\0${options.cwd}\0${options.promptKind}\0${options.signed}\0${cols}`;
     if (sig === feedSig) return;
     log = buildScreen(options, cols, minRows);
     measure();

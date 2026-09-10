@@ -85,6 +85,7 @@ export function MiniChat({
   roomLabel,
   rooms,
   people,
+  typing,
   hint,
   value,
   promptKind,
@@ -102,6 +103,7 @@ export function MiniChat({
   roomLabel: string;
   rooms: { id: string }[];
   people: string[];
+  typing: string;
   hint: string;
   value: string;
   promptKind: "shell" | "select" | "password";
@@ -258,6 +260,7 @@ export function MiniChat({
             onSubmit={onSubmit}
           >
             <div className="min-w-0 flex-1">
+              {typing ? <div className="px-3 pb-1 text-xs text-muted-foreground">{typing}</div> : null}
               {hint ? <div className="px-3 pb-1.5 text-xs text-muted-foreground">{hint}</div> : null}
               <input
                 ref={inputRef}
