@@ -172,8 +172,7 @@ function createDb(file: string) {
     | { ok: true; left: number }
     | { ok: false; retryAfterMs: number; reason: "cooldown" | "limit" } => {
     const row = getLimit.get(ip) as
-      | { count: number; window_start: number; last_sent: number }
-      | undefined;
+      { count: number; window_start: number; last_sent: number } | undefined;
     if (row && now - row.last_sent < GUEST_COOLDOWN_MS) {
       return {
         ok: false,
@@ -349,9 +348,7 @@ function createDb(file: string) {
       who: string,
       body: string,
       guestIp: string | null,
-    ):
-      | { ok: true; message: Message; left: number }
-      | { ok: false; error: string } {
+    ): { ok: true; message: Message; left: number } | { ok: false; error: string } {
       db.exec("BEGIN");
       try {
         if (roomId !== GUEST_ROOM && !getRoomStmt.get(roomId)) {
