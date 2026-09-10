@@ -24,11 +24,10 @@ const ORIGINS = (
   .map((s) => s.trim());
 const db = openDb(DATA_DIR);
 
-const sockets = new Map<
-  { send: (data: string) => void },
-  { room: string | null; nick: string; userId: string | null }
->();
-type Sock = { send: (data: string) => void };
+type Sock = { send: (data: string) => void; readyState?: number };
+type Meta = { room: string | null; nick: string; userId: string | null };
+const sockets = new Map<Sock, Meta>();
+const rooms = new Map<string, Set<Sock>>();
 const typingTimers = new Map<Sock, ReturnType<typeof setTimeout>>();
 
 function clientIp(c: { req: { header: (n: string) => string | undefined } }) {
@@ -50,71 +49,126 @@ function publishChat(roomId: string, sender: string, text: string, guestIp: stri
   return result;
 }
 
-function broadcast(msg: Message) {
-  const payload = JSON.stringify({ type: "message", message: msg });
-  for (const [ws, meta] of sockets) {
-    if (meta.room !== msg.roomId) continue;
-    try {
-      ws.send(payload);
-    } catch {
-      sockets.delete(ws);
-    }
+function socketNick(meta: Meta) {
+  return meta.nick.trim().slice(0, 24);
+}
+
+function addToRoom(ws: Sock, room: string) {
+  let set = rooms.get(room);
+  if (!set) {
+    set = new Set();
+    rooms.set(room, set);
+  }
+  set.add(ws);
+}
+
+function removeFromRoom(ws: Sock, room: string | null | undefined) {
+  if (!room) return;
+  const set = rooms.get(room);
+  if (!set) return;
+  set.delete(ws);
+  if (set.size === 0) rooms.delete(room);
+}
+
+function clearTypingTimer(ws: Sock) {
+  const timer = typingTimers.get(ws);
+  if (!timer) return false;
+  clearTimeout(timer);
+  typingTimers.delete(ws);
+  return true;
+}
+
+function flushTyping(ws: Sock, meta: Meta | undefined) {
+  if (!clearTypingTimer(ws)) return;
+  const nick = meta ? socketNick(meta) : "";
+  if (!meta?.room || !nick) return;
+  fanout(meta.room, JSON.stringify({ type: "typing:stop", nick }), ws);
+}
+
+function sendOrDrop(ws: Sock, payload: string) {
+  if (ws.readyState === 2 || ws.readyState === 3) {
+    dropSocket(ws, false);
+    return;
+  }
+  try {
+    ws.send(payload);
+  } catch {
+    dropSocket(ws, false);
   }
 }
 
+function fanout(room: string, payload: string, except?: Sock) {
+  const set = rooms.get(room);
+  if (!set) return;
+  for (const ws of [...set]) {
+    if (ws === except) continue;
+    sendOrDrop(ws, payload);
+  }
+}
+
+function broadcast(msg: Message) {
+  fanout(msg.roomId, JSON.stringify({ type: "message", message: msg }));
+}
+
 function namesIn(room: string) {
+  const set = rooms.get(room);
+  if (!set) return [];
   const names: string[] = [];
-  for (const meta of sockets.values()) {
-    if (meta.room === room && meta.nick) names.push(meta.nick);
+  for (const ws of set) {
+    const nick = sockets.get(ws)?.nick;
+    if (nick) names.push(nick);
   }
   return [...new Set(names)];
 }
 
 function presence(room: string | null) {
   if (!room) return;
-  const payload = JSON.stringify({ type: "presence", names: namesIn(room) });
-  for (const [ws, meta] of sockets) {
-    if (meta.room !== room) continue;
-    try {
-      ws.send(payload);
-    } catch {
-      sockets.delete(ws);
-    }
-  }
+  fanout(room, JSON.stringify({ type: "presence", names: namesIn(room) }));
 }
 
-function displayNick(meta: { nick: string; userId: string | null }) {
-  return ((meta.userId ? db.getNick(meta.userId) : null) || meta.nick).trim().slice(0, 24);
+function evictSocket(ws: Sock, announce: boolean) {
+  const prev = sockets.get(ws);
+  if (!prev?.room) {
+    clearTypingTimer(ws);
+    return;
+  }
+  flushTyping(ws, prev);
+  removeFromRoom(ws, prev.room);
+  sockets.set(ws, { room: null, nick: prev.nick, userId: prev.userId });
+  if (announce) presence(prev.room);
 }
 
-function fanout(room: string, payload: string, except?: Sock) {
-  for (const [ws, meta] of sockets) {
-    if (meta.room !== room || ws === except) continue;
-    try {
-      ws.send(payload);
-    } catch {
-      sockets.delete(ws);
-      const t = typingTimers.get(ws);
-      if (t) clearTimeout(t);
-      typingTimers.delete(ws);
-    }
+function dropSocket(ws: Sock, announce = true) {
+  const prev = sockets.get(ws);
+  if (!prev) {
+    clearTypingTimer(ws);
+    return;
   }
+  sockets.delete(ws);
+  flushTyping(ws, prev);
+  removeFromRoom(ws, prev.room);
+  if (announce && prev.room) presence(prev.room);
+}
+
+function bindRoom(ws: Sock, room: string, nick: string, userId: string | null) {
+  const prev = sockets.get(ws);
+  const prevRoom = prev?.room ?? null;
+  flushTyping(ws, prev);
+  if (prevRoom && prevRoom !== room) {
+    removeFromRoom(ws, prevRoom);
+    presence(prevRoom);
+  }
+  sockets.set(ws, { room, nick, userId });
+  addToRoom(ws, room);
 }
 
 function stopTyping(ws: Sock) {
-  const timer = typingTimers.get(ws);
-  if (timer) clearTimeout(timer);
-  typingTimers.delete(ws);
-  if (!timer) return;
-  const meta = sockets.get(ws);
-  const nick = meta ? displayNick(meta) : "";
-  if (!meta?.room || !nick) return;
-  fanout(meta.room, JSON.stringify({ type: "typing:stop", nick }), ws);
+  flushTyping(ws, sockets.get(ws));
 }
 
 function startTyping(ws: Sock) {
   const meta = sockets.get(ws);
-  const nick = meta ? displayNick(meta) : "";
+  const nick = meta ? socketNick(meta) : "";
   if (!meta?.room || !nick) return;
   const already = typingTimers.has(ws);
   const prev = typingTimers.get(ws);
@@ -124,7 +178,7 @@ function startTyping(ws: Sock) {
     setTimeout(() => {
       typingTimers.delete(ws);
       const cur = sockets.get(ws);
-      const who = cur ? displayNick(cur) : "";
+      const who = cur ? socketNick(cur) : "";
       if (!cur?.room || !who) return;
       fanout(cur.room, JSON.stringify({ type: "typing:stop", nick: who }), ws);
     }, 5000),
@@ -210,7 +264,7 @@ app.post("/api/rooms", async (c) => {
     return c.json({ error: "invalid json" }, 400);
   }
   const access = body.access === "password" || body.access === "invite" ? body.access : "public";
-  const made = db.createRoom(body.id ?? "", session.user.id, access, body.password);
+  const made = await db.createRoom(body.id ?? "", session.user.id, access, body.password);
   if (!made.ok) {
     if (made.reason === "invalid") return c.json({ error: "bad room name" }, 400);
     return c.json({ error: "file exists" }, 409);
@@ -243,15 +297,9 @@ app.post("/api/sudo", async (c) => {
       return c.json({ error: "permission denied" }, 403);
     }
     const payload = JSON.stringify({ type: "kicked", reason: `room ${id} removed` });
-    for (const [ws, meta] of sockets) {
-      if (meta.room !== id) continue;
-      try {
-        ws.send(payload);
-      } catch {
-        sockets.delete(ws);
-        continue;
-      }
-      sockets.set(ws, { room: null, nick: meta.nick, userId: meta.userId });
+    for (const ws of [...(rooms.get(id) ?? [])]) {
+      sendOrDrop(ws, payload);
+      evictSocket(ws, false);
     }
     return c.json({ ok: true });
   }
@@ -260,15 +308,11 @@ app.post("/api/sudo", async (c) => {
     if (!room || !arg) return c.json({ error: "usage" }, 400);
     let n = 0;
     const payload = JSON.stringify({ type: "kicked", reason: "kicked" });
-    for (const [ws, meta] of sockets) {
-      if (meta.room !== room || meta.nick !== arg) continue;
-      try {
-        ws.send(payload);
-      } catch {
-        sockets.delete(ws);
-        continue;
-      }
-      sockets.set(ws, { room: null, nick: meta.nick, userId: meta.userId });
+    for (const ws of [...(rooms.get(room) ?? [])]) {
+      const meta = sockets.get(ws);
+      if (meta?.nick !== arg) continue;
+      sendOrDrop(ws, payload);
+      evictSocket(ws, false);
       n += 1;
     }
     presence(room);
@@ -277,15 +321,7 @@ app.post("/api/sudo", async (c) => {
   if (cmd === "wall") {
     const room = (body.room ?? "").trim().toLowerCase();
     if (!room || !arg) return c.json({ error: "usage" }, 400);
-    const payload = JSON.stringify({ type: "sys", body: arg });
-    for (const [ws, meta] of sockets) {
-      if (meta.room !== room) continue;
-      try {
-        ws.send(payload);
-      } catch {
-        sockets.delete(ws);
-      }
-    }
+    fanout(room, JSON.stringify({ type: "sys", body: arg }));
     return c.json({ ok: true });
   }
   return c.json({ error: "unknown command" }, 400);
@@ -349,7 +385,7 @@ app.post("/api/messages", async (c) => {
     .trim()
     .slice(0, 24);
   const roomId = (body.room ?? "").trim().toLowerCase();
-  const enter = db.canEnter(roomId, session?.user.id ?? null, body.password, body.token);
+  const enter = await db.canEnter(roomId, session?.user.id ?? null, body.password, body.token);
   if (!enter.ok) {
     if (enter.reason === "missing") return c.json({ error: "no such room" }, 404);
     return c.json({ error: "permission denied" }, 403);
@@ -396,10 +432,7 @@ app.get(
             return;
           }
           if (data.type === "leave") {
-            const prev = sockets.get(ws);
-            stopTyping(ws);
-            sockets.set(ws, { room: null, nick: prev?.nick ?? "", userId: prev?.userId ?? null });
-            presence(prev?.room ?? null);
+            evictSocket(ws, true);
             return;
           }
           if (data.type === "nick") {
@@ -411,7 +444,8 @@ app.get(
           }
           if (data.type === "who") {
             const prev = sockets.get(ws);
-            ws.send(
+            sendOrDrop(
+              ws,
               JSON.stringify({ type: "presence", names: prev?.room ? namesIn(prev.room) : [] }),
             );
             return;
@@ -427,24 +461,31 @@ app.get(
           if (data.type === "send") {
             const prev = sockets.get(ws);
             if (!prev?.room) {
-              ws.send(JSON.stringify({ type: "nack", error: "not in a room", body: data.body }));
+              sendOrDrop(
+                ws,
+                JSON.stringify({ type: "nack", error: "not in a room", body: data.body }),
+              );
               return;
             }
             stopTyping(ws);
             const sender = ((prev.userId ? db.getNick(prev.userId) : null) || prev.nick).trim();
             const result = publishChat(prev.room, sender, data.body ?? "", prev.userId ? null : ip);
             if (!result.ok) {
-              ws.send(JSON.stringify({ type: "nack", error: result.error, body: data.body }));
+              sendOrDrop(
+                ws,
+                JSON.stringify({ type: "nack", error: result.error, body: data.body }),
+              );
             }
             return;
           }
           if (data.type !== "join") return;
           const room = (data.room ?? "").trim().toLowerCase();
           const session = await auth.api.getSession({ headers });
-          const enter = db.canEnter(room, session?.user.id ?? null, data.password, data.token);
+          const enter = await db.canEnter(room, session?.user.id ?? null, data.password, data.token);
           if (!enter.ok) {
             if (enter.reason === "missing") {
-              ws.send(
+              sendOrDrop(
+                ws,
                 JSON.stringify({
                   type: "error",
                   error: `ssh: could not resolve hostname ${data.room}`,
@@ -453,33 +494,25 @@ app.get(
               return;
             }
             if (enter.reason === "password") {
-              ws.send(JSON.stringify({ type: "auth", mode: "password" }));
+              sendOrDrop(ws, JSON.stringify({ type: "auth", mode: "password" }));
               return;
             }
-            ws.send(JSON.stringify({ type: "error", error: "permission denied" }));
+            sendOrDrop(ws, JSON.stringify({ type: "error", error: "permission denied" }));
             return;
           }
           const prev = sockets.get(ws);
-          stopTyping(ws);
           const nick = (data.nick ?? prev?.nick ?? "").trim().slice(0, 24);
-          sockets.set(ws, { room, nick, userId: session?.user.id ?? prev?.userId ?? null });
-          if (prev?.room && prev.room !== room) presence(prev.room);
-          ws.send(JSON.stringify({ type: "history", messages: db.history(room) }));
+          bindRoom(ws, room, nick, session?.user.id ?? prev?.userId ?? null);
+          sendOrDrop(ws, JSON.stringify({ type: "history", messages: db.history(room) }));
           presence(room);
         })();
       },
       onClose(_evt, ws) {
-        stopTyping(ws);
-        const prev = sockets.get(ws);
-        sockets.delete(ws);
-        presence(prev?.room ?? null);
+        dropSocket(ws);
         console.log(`[WS] disconnected (active: ${sockets.size})`);
       },
       onError(evt, ws) {
-        stopTyping(ws);
-        const prev = sockets.get(ws);
-        sockets.delete(ws);
-        presence(prev?.room ?? null);
+        dropSocket(ws);
         console.error(`[WS] error (active: ${sockets.size})`, evt);
       },
     };

@@ -1,7 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { promisify } from "node:util";
+
+const scryptAsync = promisify(scrypt);
 
 function envInt(name: string, fallback: number) {
   const n = Number(process.env[name]);
@@ -23,16 +26,16 @@ export type Message = {
 
 export type RoomAccess = "public" | "password" | "invite";
 
-function hashPassword(password: string) {
+async function hashPassword(password: string) {
   const salt = randomBytes(16);
-  const hash = scryptSync(password, salt, 32);
+  const hash = (await scryptAsync(password, salt, 32)) as Buffer;
   return `${salt.toString("hex")}:${hash.toString("hex")}`;
 }
 
-function checkPassword(password: string, stored: string) {
+async function checkPassword(password: string, stored: string) {
   const [saltHex, hashHex] = stored.split(":");
   if (!saltHex || !hashHex) return false;
-  const hash = scryptSync(password, Buffer.from(saltHex, "hex"), 32);
+  const hash = (await scryptAsync(password, Buffer.from(saltHex, "hex"), 32)) as Buffer;
   const expected = Buffer.from(hashHex, "hex");
   return hash.length === expected.length && timingSafeEqual(hash, expected);
 }
@@ -273,14 +276,18 @@ function createDb(file: string) {
       return listRoomsStmt.all() as { id: string; access: string; owner: string }[];
     },
 
-    canEnter(id: string, userId: string | null, password?: string, token?: string) {
+    async canEnter(id: string, userId: string | null, password?: string, token?: string) {
       const room = this.getRoom(id);
       if (!room) return { ok: false as const, reason: "missing" as const };
       if (room.access === "public") return { ok: true as const };
       if (userId && userId === room.ownerId) return { ok: true as const };
       if (room.access === "password") {
         if (!password) return { ok: false as const, reason: "password" as const };
-        if (!checkPassword(password, room.passwordHash)) {
+        try {
+          if (!(await checkPassword(password, room.passwordHash))) {
+            return { ok: false as const, reason: "denied" as const };
+          }
+        } catch {
           return { ok: false as const, reason: "denied" as const };
         }
         return { ok: true as const };
@@ -290,14 +297,21 @@ function createDb(file: string) {
       return { ok: false as const, reason: "denied" as const };
     },
 
-    createRoom(raw: string, ownerId: string, access: RoomAccess = "public", password?: string) {
+    async createRoom(raw: string, ownerId: string, access: RoomAccess = "public", password?: string) {
       const id = parseRoomId(raw);
       if (!id) return { ok: false as const, reason: "invalid" as const };
       if (access === "password" && !password)
         return { ok: false as const, reason: "invalid" as const };
       if (id === GUEST_ROOM) return { ok: false as const, reason: "exists" as const };
       if (getRoomStmt.get(id)) return { ok: false as const, reason: "exists" as const };
-      const hash = access === "password" && password ? hashPassword(password) : null;
+      let hash: string | null = null;
+      if (access === "password" && password) {
+        try {
+          hash = await hashPassword(password);
+        } catch {
+          return { ok: false as const, reason: "invalid" as const };
+        }
+      }
       const token = access === "invite" ? randomBytes(16).toString("hex") : null;
       insertRoom.run(id, ownerId, Date.now(), access, hash, token);
       return { ok: true as const, id, token: token ?? undefined };
