@@ -403,13 +403,11 @@ export function Chat() {
     histRef.current = loadHist();
     hissOn.current = localStorage.getItem("crt-noise") !== "off";
     applySkin(loadSkin());
+    const guest = loadGuestName();
+    nickRef.current = guest;
+    setNick(guest);
     const peerTok = tokenFromHash(location.hash);
-    if (peerTok) {
-      peerMode.current = true;
-      const guest = loadGuestName();
-      nickRef.current = guest;
-      setNick(guest);
-    }
+    if (peerTok) peerMode.current = true;
     const q = new URLSearchParams(location.search);
     const room = parseRoomId(q.get("join") ?? "");
     const token = q.get("t") ?? "";
