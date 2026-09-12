@@ -1,4 +1,5 @@
 export const HELP = `# Rooms
+/host               Peer room link (no server, max 6)
 /ls                 List rooms
 /rooms              List rooms + info
 /myrooms            Rooms you own or are invited to
@@ -51,6 +52,7 @@ export function helpText(narrow: boolean, admin: boolean) {
 }
 
 export const HELP_NARROW = `# Rooms
+/host  peer room link
 /ls  list rooms
 /rooms  rooms + info
 /myrooms

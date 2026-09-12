@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { selfCheck } from "../lib/p2p.ts";
 import { GUEST_COOLDOWN_MS, GUEST_LIMIT, GUEST_ROOM, GUEST_TTL_MS, openDb } from "./db.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "mychat-"));
@@ -93,4 +94,5 @@ if (!db.history(GUEST_ROOM).some((m) => m.id === firstPub.message.id)) {
 const cool = db.publish(GUEST_ROOM, "a", "hi2", "9.9.9.9");
 if (cool.ok || cool.error !== "slow down") throw new Error("publish cooldown");
 rmSync(dir, { recursive: true });
+await selfCheck();
 console.log("ok");

@@ -2,6 +2,15 @@
 
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { authClient } from "@/lib/auth-client";
+import {
+  joinPeerRoom,
+  mintToken,
+  peerLink,
+  roomLabel as peerRoomLabel,
+  tokenFromHash,
+  type PeerRoom,
+  type Wire,
+} from "@/lib/p2p";
 import { authMenu, helpText, parseRoomId, parseSsh, privateMenu, settingsMenu } from "@/lib/shell";
 import { MiniChat } from "@/components/MiniChat";
 import { CrtBackground } from "@/src/shaders/crt/CrtBackground";
@@ -17,7 +26,7 @@ type Message = {
 
 const NOISE =
   "https://res.cloudinary.com/qnt0vxiu/video/upload/v1788945215/freesound_community-analog-crt-tv-electronic-static-noise-60428_ywldmf.mp3";
-const MOTD = "chatdump\ntype /help  ·  /ssh guest";
+const MOTD = "chatdump\ntype /help  ·  /host  ·  /ssh guest";
 
 function apiBase() {
   if (process.env.NODE_ENV === "development") return "http://127.0.0.1:3000";
@@ -185,6 +194,11 @@ export function Chat() {
   const skinRef = useRef<"crt" | "min">("min");
   const booted = useRef(false);
   const wsRef = useRef<WebSocket | undefined>(undefined);
+  const peerRef = useRef<PeerRoom | null>(null);
+  const peerMode = useRef(false);
+  const linkRef = useRef("");
+  const joining = useRef(false);
+  const applyRef = useRef<(data: Wire) => void>(() => {});
   const nickRef = useRef("");
   const signedRef = useRef(false);
   const adminRef = useRef(false);
@@ -227,6 +241,22 @@ export function Chat() {
     setTypers((prev) => prev.filter((n) => names.includes(n)));
   }
 
+  function emit(obj: { type: string; body?: string; nick?: string }) {
+    const peer = peerRef.current;
+    if (peer) {
+      if (obj.type === "send" && obj.body) peer.send(obj.body);
+      else if (obj.type === "typing:start") peer.typing(true);
+      else if (obj.type === "typing:stop") peer.typing(false);
+      else if (obj.type === "nick" && obj.nick) peer.setNick(obj.nick);
+      else if (obj.type === "leave") peer.leave();
+      return true;
+    }
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify(obj));
+    return true;
+  }
+
   function stopTyping() {
     if (typingTimer.current) {
       clearTimeout(typingTimer.current);
@@ -234,23 +264,24 @@ export function Chat() {
     }
     if (!typingOn.current) return;
     typingOn.current = false;
-    const ws = wsRef.current;
-    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "typing:stop" }));
+    emit({ type: "typing:stop" });
   }
 
   function pingTyping() {
     if (!roomRef.current || promptKind !== "shell") return;
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (!typingOn.current) {
+      if (!emit({ type: "typing:start" })) return;
       typingOn.current = true;
-      ws.send(JSON.stringify({ type: "typing:start" }));
     }
     if (typingTimer.current) clearTimeout(typingTimer.current);
     typingTimer.current = setTimeout(stopTyping, 3000);
   }
 
   function enterRoom(id: string) {
+    if (peerMode.current) {
+      setHint("no server");
+      return;
+    }
     if (roomRef.current === id) return;
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -265,16 +296,49 @@ export function Chat() {
   function leaveRoom() {
     if (!roomRef.current) return;
     stopTyping();
+    const peer = peerRef.current;
+    peerRef.current = null;
+    linkRef.current = "";
+    joining.current = false;
+    if (peer) {
+      peer.leave();
+      history.replaceState(null, "", `${location.pathname}${location.search}`);
+      setLive(false);
+    } else {
+      wsRef.current?.send(JSON.stringify({ type: "leave" }));
+    }
     roomRef.current = null;
     pendingJoin.current = null;
     gateRef.current = null;
     inbox.current = [];
     setPresence([]);
     setTypers([]);
-    wsRef.current?.send(JSON.stringify({ type: "leave" }));
     setPromptKind("shell");
     setCwd("~");
     setFeed([{ id: `sys-${++sysN.current}`, sender: "", body: "left room" }]);
+  }
+
+  async function startPeer(token: string, url?: string) {
+    if (peerRef.current || joining.current) return;
+    joining.current = true;
+    peerMode.current = true;
+    if (url) linkRef.current = url;
+    wsRef.current?.close();
+    try {
+      pendingJoin.current = { room: await peerRoomLabel(token), echo: "join link" };
+      const room = await joinPeerRoom(
+        token,
+        () => nickRef.current,
+        (ev) => applyRef.current(ev),
+      );
+      peerRef.current = room;
+      if (url) linkRef.current = url;
+      setLive(true);
+    } catch (err) {
+      joining.current = false;
+      throw err;
+    }
+    joining.current = false;
   }
 
   function joinMsg(room: string) {
@@ -326,6 +390,7 @@ export function Chat() {
   }
 
   function loadRooms() {
+    if (peerMode.current) return;
     fetch(apiUrl("/api/rooms"))
       .then((r) => r.json())
       .then((d: { rooms?: { id: string }[] }) => setRooms(d.rooms ?? []))
@@ -338,6 +403,13 @@ export function Chat() {
     histRef.current = loadHist();
     hissOn.current = localStorage.getItem("crt-noise") !== "off";
     applySkin(loadSkin());
+    const peerTok = tokenFromHash(location.hash);
+    if (peerTok) {
+      peerMode.current = true;
+      const guest = loadGuestName();
+      nickRef.current = guest;
+      setNick(guest);
+    }
     const q = new URLSearchParams(location.search);
     const room = parseRoomId(q.get("join") ?? "");
     const token = q.get("t") ?? "";
@@ -354,6 +426,7 @@ export function Chat() {
   }, [skin, live]);
 
   useEffect(() => {
+    if (peerMode.current) return;
     let stop = false;
     void (async () => {
       const { data } = await authClient.getSession();
@@ -403,128 +476,133 @@ export function Chat() {
     };
   }, []);
 
+  applyRef.current = (data) => {
+    if (data.type === "typing:start") {
+      const who = data.nick;
+      if (who && who !== nickRef.current) {
+        setTypers((prev) => (prev.includes(who) ? prev : [...prev, who]));
+      }
+      return;
+    }
+    if (data.type === "typing:stop") {
+      const who = data.nick;
+      if (who) setTypers((prev) => prev.filter((n) => n !== who));
+      return;
+    }
+    if (data.type === "presence") {
+      setPresence(data.names);
+      return;
+    }
+    if (data.type === "sys") {
+      sys(data.body);
+      return;
+    }
+    if (data.type === "nack") {
+      setHint(data.error ?? "send failed");
+      if (data.body) setText(data.body);
+      return;
+    }
+    if (data.type === "kicked") {
+      roomRef.current = null;
+      pendingJoin.current = null;
+      gateRef.current = null;
+      inbox.current = [];
+      setPresence([]);
+      setTypers([]);
+      typingOn.current = false;
+      if (typingTimer.current) {
+        clearTimeout(typingTimer.current);
+        typingTimer.current = null;
+      }
+      setPromptKind("shell");
+      setCwd("~");
+      setFeed([
+        {
+          id: `sys-${++sysN.current}`,
+          sender: "",
+          body: data.reason ?? "kicked",
+        },
+      ]);
+      return;
+    }
+    if (data.type === "auth") {
+      const joining = pendingJoin.current;
+      if (joining) {
+        gateRef.current = { kind: "ssh-pass", room: joining.room, echo: joining.echo };
+        setPromptKind("password");
+      }
+      return;
+    }
+    if (data.type === "error") {
+      const joining = pendingJoin.current;
+      pendingJoin.current = null;
+      gateRef.current = null;
+      setPromptKind("shell");
+      sys(joining ? `${joining.echo}\n${data.error}` : data.error);
+      return;
+    }
+    if (data.type === "history") {
+      inbox.current = data.messages;
+      seen.current = new Set(data.messages.map((m) => m.id));
+      const joining = pendingJoin.current;
+      if (joining) {
+        roomRef.current = joining.room;
+        pendingJoin.current = null;
+        gateRef.current = null;
+        setPromptKind("shell");
+        setCwd(`~/${joining.room}`);
+      }
+      if (roomRef.current) setFeed(asLines(data.messages));
+      setTypers([]);
+      return;
+    }
+    if (data.type !== "message") return;
+    const msg = data.message;
+    if (msg.roomId !== roomRef.current || seen.current.has(msg.id)) return;
+    seen.current.add(msg.id);
+    inbox.current.push(msg);
+    if (msg.sender !== nickRef.current && mentioned(msg.body, nickRef.current)) beep();
+    setFeed((prev) => [...prev, { id: msg.id, sender: msg.sender, body: msg.body }]);
+  };
+
   useEffect(() => {
+    if (peerMode.current) return;
     let stop = false;
+    let dead = false;
+    let fails = 0;
     let timer: ReturnType<typeof setTimeout>;
     let ws: WebSocket | undefined;
     let hidAt = 0;
     const connect = () => {
-      if (stop) return;
+      if (stop || dead || peerMode.current) return;
       clearTimeout(timer);
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING))
         return;
       ws = new WebSocket(wsUrl());
       wsRef.current = ws;
       ws.onopen = () => {
+        fails = 0;
         setLive(true);
         if (roomRef.current) ws?.send(JSON.stringify(joinMsg(roomRef.current)));
         else tryUrlJoin();
       };
       ws.onclose = () => {
         setLive(false);
-        if (!stop) timer = setTimeout(connect, 1500);
+        if (stop || peerMode.current) return;
+        fails += 1;
+        if (fails >= 2) {
+          dead = true;
+          sys("api is down. /host to open a peer room");
+          return;
+        }
+        timer = setTimeout(connect, 1500);
       };
       ws.onmessage = (ev) => {
-        const data = JSON.parse(String(ev.data)) as
-          | { type: "history"; messages: Message[] }
-          | { type: "message"; message: Message }
-          | { type: "error"; error: string }
-          | { type: "auth"; mode: string }
-          | { type: "presence"; names: string[] }
-          | { type: "kicked"; reason?: string }
-          | { type: "sys"; body: string }
-          | { type: "nack"; error?: string; body?: string }
-          | { type: "typing:start"; nick: string }
-          | { type: "typing:stop"; nick: string };
-        if (data.type === "typing:start") {
-          const who = data.nick;
-          if (who && who !== nickRef.current) {
-            setTypers((prev) => (prev.includes(who) ? prev : [...prev, who]));
-          }
-          return;
-        }
-        if (data.type === "typing:stop") {
-          const who = data.nick;
-          if (who) setTypers((prev) => prev.filter((n) => n !== who));
-          return;
-        }
-        if (data.type === "presence") {
-          setPresence(data.names);
-          return;
-        }
-        if (data.type === "sys") {
-          sys(data.body);
-          return;
-        }
-        if (data.type === "nack") {
-          setHint(data.error ?? "send failed");
-          if (data.body) setText(data.body);
-          return;
-        }
-        if (data.type === "kicked") {
-          roomRef.current = null;
-          pendingJoin.current = null;
-          gateRef.current = null;
-          inbox.current = [];
-          setPresence([]);
-          setTypers([]);
-          typingOn.current = false;
-          if (typingTimer.current) {
-            clearTimeout(typingTimer.current);
-            typingTimer.current = null;
-          }
-          setPromptKind("shell");
-          setCwd("~");
-          setFeed([
-            {
-              id: `sys-${++sysN.current}`,
-              sender: "",
-              body: data.reason ?? "kicked",
-            },
-          ]);
-          return;
-        }
-        if (data.type === "auth") {
-          const joining = pendingJoin.current;
-          if (joining) {
-            gateRef.current = { kind: "ssh-pass", room: joining.room, echo: joining.echo };
-            setPromptKind("password");
-          }
-          return;
-        }
-        if (data.type === "error") {
-          const joining = pendingJoin.current;
-          pendingJoin.current = null;
-          gateRef.current = null;
-          setPromptKind("shell");
-          sys(joining ? `${joining.echo}\n${data.error}` : data.error);
-          return;
-        }
-        if (data.type === "history") {
-          inbox.current = data.messages;
-          seen.current = new Set(data.messages.map((m) => m.id));
-          const joining = pendingJoin.current;
-          if (joining) {
-            roomRef.current = joining.room;
-            pendingJoin.current = null;
-            gateRef.current = null;
-            setPromptKind("shell");
-            setCwd(`~/${joining.room}`);
-          }
-          if (roomRef.current) setFeed(asLines(data.messages));
-          setTypers([]);
-          return;
-        }
-        if (data.type !== "message") return;
-        const msg = data.message;
-        if (msg.roomId !== roomRef.current || seen.current.has(msg.id)) return;
-        seen.current.add(msg.id);
-        inbox.current.push(msg);
-        if (msg.sender !== nickRef.current && mentioned(msg.body, nickRef.current)) beep();
-        setFeed((prev) => [...prev, { id: msg.id, sender: msg.sender, body: msg.body }]);
+        applyRef.current(JSON.parse(String(ev.data)) as Wire);
       };
     };
     const wake = () => {
+      if (dead || peerMode.current) return;
       if (document.hidden) {
         hidAt = Date.now();
         return;
@@ -565,8 +643,35 @@ export function Chat() {
     if (nick && wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "nick", nick }));
     }
+    peerRef.current?.setNick(nick);
     tryUrlJoin();
   }, [live, nick]);
+
+  useEffect(() => {
+    const token = tokenFromHash(location.hash);
+    if (!token || !nickRef.current) return;
+    let stop = false;
+    const url = peerLink(token, location.origin);
+    linkRef.current = url;
+    void startPeer(token, url)
+      .then(() => {
+        if (stop) {
+          peerRef.current?.leave();
+          peerRef.current = null;
+          return;
+        }
+        sys("peer room. max 6. dies when the last tab closes.");
+      })
+      .catch((err: unknown) => {
+        if (!stop) sys(err instanceof Error ? err.message : "peer room failed");
+      });
+    return () => {
+      stop = true;
+      peerRef.current?.leave();
+      peerRef.current = null;
+      joining.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -606,7 +711,7 @@ export function Chat() {
       localStorage.setItem("guest-name", name);
     }
     setNick(name);
-    wsRef.current?.send(JSON.stringify({ type: "nick", nick: name }));
+    emit({ type: "nick", nick: name });
   }
 
   async function postRoom(
@@ -649,6 +754,45 @@ export function Chat() {
     }
     const [cmd, ...rest] = line.slice(1).split(/\s+/);
     const arg = rest.join(" ").trim();
+    if (
+      peerMode.current &&
+      (cmd === "ls" ||
+        cmd === "rooms" ||
+        cmd === "myrooms" ||
+        cmd === "mkdir" ||
+        cmd === "rmdir" ||
+        cmd === "inv" ||
+        cmd === "ssh" ||
+        cmd === "sudo")
+    ) {
+      sys(`${echo}\nno server. this is a peer room`);
+      return;
+    }
+    if (cmd === "host") {
+      if (peerRef.current || joining.current) {
+        sys(linkRef.current ? `${echo}\n${linkRef.current}` : `${echo}\nopening room`);
+        return;
+      }
+      const token = mintToken();
+      const url = peerLink(token, location.origin);
+      history.replaceState(null, "", `${location.pathname}${location.search}#r=${token}`);
+      try {
+        await startPeer(token, url);
+        let copied = false;
+        try {
+          await navigator.clipboard.writeText(url);
+          copied = true;
+        } catch {
+          /* the link is on screen */
+        }
+        sys(
+          `${echo}\n${url}\n${copied ? "copied. " : ""}max 6. room dies when the last tab closes.`,
+        );
+      } catch (err) {
+        sys(`${echo}\n${err instanceof Error ? err.message : "peer room failed"}`);
+      }
+      return;
+    }
     if (cmd === "clear") {
       setFeed([]);
       return;
@@ -811,6 +955,10 @@ export function Chat() {
       return;
     }
     if (cmd === "link") {
+      if (peerMode.current) {
+        sys(linkRef.current ? `${echo}\n${linkRef.current}` : `${echo}\nnot in a room`);
+        return;
+      }
       if (!signedRef.current) {
         sys(`${echo}\nlink: permission denied`);
         return;
@@ -989,7 +1137,7 @@ export function Chat() {
       meIdRef.current = "";
       const guest = loadGuestName();
       setNick(guest);
-      wsRef.current?.send(JSON.stringify({ type: "nick", nick: guest }));
+      emit({ type: "nick", nick: guest });
       sys(`${echo}\nsigned out`);
       return;
     }
@@ -1147,13 +1295,11 @@ export function Chat() {
       await run(body);
       return;
     }
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (!emit({ type: "send", body })) {
       setHint("server offline");
       setText(body);
       return;
     }
-    ws.send(JSON.stringify({ type: "send", body }));
   }
 
   const roomLabel = cwd === "~" ? "HOME" : cwd.replace(/^~\//, "");
