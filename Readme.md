@@ -27,7 +27,7 @@ Sign in with Google or GitHub if you want a persistent nick and rooms of your ow
 /ssh user@lounge
 ```
 
-The server answers in SSH dialect when a room is missing (`ssh: could not resolve hostname …`). That is not a joke layered on later. The terminal *is* the product.
+The server answers in SSH dialect when a room is missing (`ssh: could not resolve hostname …`). That is not a joke layered on later. The terminal _is_ the product.
 
 `/host` opens a browser-to-browser peer room (Trystero, max 6). No server history. No relay on this Cloudflare account. If the VPS is down, chat still happens — just not through us.
 
@@ -67,15 +67,15 @@ Guest abuse is treated as a data problem, not a dashboard: cooldown, window cap,
 
 This repo is about fifty commits, most of them in three days. The order matters more than the count.
 
-| When | What actually changed |
-|------|------------------------|
-| First commit | One-box guest chat. UI and API together. Docker. |
-| Same day | Split: UI to Cloudflare, VPS keeps API/WS only. Then a deploy fix so the Next export is Worker assets, not a guess. |
-| Same day | Guest TTL (24h). Server-side limits. Rate limit that was forgotten, then added. SQLite WAL. CI. |
-| Same day | Google / GitHub via better-auth. Custom rooms. Commands rewritten until the UX was a shell. |
-| Same day | Vault Boy watermark. CRT static (an analog noise loop). Mobile. Settings. Alt-tab reconnect — a backgrounded tab must wake the socket. |
-| Next days | Sidebar / minimal skin. Typing indicators. Format gate in CI. Async scrypt for room passwords. Room-scoped socket fanout instead of broadcasting every message to every connection. |
-| Then | `/host` — if the VPS is down, talk peer to peer. |
+| When         | What actually changed                                                                                                                                                               |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| First commit | One-box guest chat. UI and API together. Docker.                                                                                                                                    |
+| Same day     | Split: UI to Cloudflare, VPS keeps API/WS only. Then a deploy fix so the Next export is Worker assets, not a guess.                                                                 |
+| Same day     | Guest TTL (24h). Server-side limits. Rate limit that was forgotten, then added. SQLite WAL. CI.                                                                                     |
+| Same day     | Google / GitHub via better-auth. Custom rooms. Commands rewritten until the UX was a shell.                                                                                         |
+| Same day     | Vault Boy watermark. CRT static (an analog noise loop). Mobile. Settings. Alt-tab reconnect — a backgrounded tab must wake the socket.                                              |
+| Next days    | Sidebar / minimal skin. Typing indicators. Format gate in CI. Async scrypt for room passwords. Room-scoped socket fanout instead of broadcasting every message to every connection. |
+| Then         | `/host` — if the VPS is down, talk peer to peer.                                                                                                                                    |
 
 Read that as a design log, not a changelog. The product started as “I want a guest chat on my VPS.” It became “static at the edge, state on a box I control, and a path that still works when the box is gone.” Everything else is furniture on that frame: CRT shaders, mentions, `/sudo`, invite links.
 
@@ -97,11 +97,11 @@ Same wire protocol in both skins. Peer rooms reuse the same `Wire` union as the 
 
 ## Rooms and identity
 
-| Who | What they can do |
-|-----|------------------|
-| Guest | `guest` room. Ephemeral. IP limits. Generated nick. |
-| Signed in | Persist `/nick`. `/mkdir` rooms. Own, invite, delete. |
-| Owner (`OWNER_ID` / `OWNER_EMAIL`) | `/sudo kick`, `/sudo wall`, `/sudo rmdir` |
+| Who                                | What they can do                                      |
+| ---------------------------------- | ----------------------------------------------------- |
+| Guest                              | `guest` room. Ephemeral. IP limits. Generated nick.   |
+| Signed in                          | Persist `/nick`. `/mkdir` rooms. Own, invite, delete. |
+| Owner (`OWNER_ID` / `OWNER_EMAIL`) | `/sudo kick`, `/sudo wall`, `/sudo rmdir`             |
 
 Room access: `public` · `password` (async scrypt, timing-safe compare) · `invite` (URL `/?join=room&t=…` or `/inv <nick>`).
 
@@ -168,21 +168,21 @@ Host bind is `127.0.0.1:3001` so it does not collide with whatever else is on 30
 
 Copy `.env.example`. `CORS_ORIGIN` must be the real UI origin (the example file has a typo). `BETTER_AUTH_SECRET` is required for login in anything that is not a toy.
 
-| Variable | Role |
-|----------|------|
-| `PORT` | Listen port (default 3000) |
-| `DATA_DIR` | SQLite directory (`./data` locally, `/data` in Docker) |
-| `CORS_ORIGIN` | Comma-separated browser origins |
-| `GUEST_LIMIT` | Max guest sends per window (50) |
-| `GUEST_WINDOW_MIN` | Window length (30) |
-| `GUEST_COOLDOWN_SEC` | Min seconds between guest sends (2) |
-| `GUEST_TTL_HOURS` | Guest message retention (24) |
-| `BETTER_AUTH_SECRET` | Session signing |
-| `BETTER_AUTH_URL` | Public API URL (OAuth callbacks) |
-| `BETTER_AUTH_TRUSTED_ORIGINS` | Cookie / OAuth origins |
-| `GITHUB_*` / `GOOGLE_*` | Omit either pair to disable that provider |
-| `OWNER_EMAIL` / `OWNER_ID` | Who `/sudo` answers to |
-| `NEXT_PUBLIC_API_URL` | Frontend build-time API base |
+| Variable                      | Role                                                   |
+| ----------------------------- | ------------------------------------------------------ |
+| `PORT`                        | Listen port (default 3000)                             |
+| `DATA_DIR`                    | SQLite directory (`./data` locally, `/data` in Docker) |
+| `CORS_ORIGIN`                 | Comma-separated browser origins                        |
+| `GUEST_LIMIT`                 | Max guest sends per window (50)                        |
+| `GUEST_WINDOW_MIN`            | Window length (30)                                     |
+| `GUEST_COOLDOWN_SEC`          | Min seconds between guest sends (2)                    |
+| `GUEST_TTL_HOURS`             | Guest message retention (24)                           |
+| `BETTER_AUTH_SECRET`          | Session signing                                        |
+| `BETTER_AUTH_URL`             | Public API URL (OAuth callbacks)                       |
+| `BETTER_AUTH_TRUSTED_ORIGINS` | Cookie / OAuth origins                                 |
+| `GITHUB_*` / `GOOGLE_*`       | Omit either pair to disable that provider              |
+| `OWNER_EMAIL` / `OWNER_ID`    | Who `/sudo` answers to                                 |
+| `NEXT_PUBLIC_API_URL`         | Frontend build-time API base                           |
 
 Quality gate (this is what CI runs):
 
@@ -196,24 +196,24 @@ Prettier, ESLint, `src/check.ts` (DB + P2P self-test, no Jest), `npm audit --aud
 
 ## Repo map
 
-| Path | What it is |
-|------|------------|
-| `app/page.tsx` | Renders `<Chat />`. The only interactive page. |
-| `app/privacy` · `app/terms` | The product, in legal prose. Read these first if you want intent. |
-| `components/Chat.tsx` | Shell, socket, auth, P2P, skins. |
-| `components/MiniChat.tsx` | Minimal UI. |
-| `components/ui/` | shadcn pieces. |
-| `lib/shell.ts` | Help text, SSH parse, room id rules. |
-| `lib/p2p.ts` | Trystero rooms. Shared `Wire` types. Mesh cap 6. |
-| `lib/auth-client.ts` | better-auth browser client, credentials included. |
-| `src/server.ts` | Hono HTTP + WebSocket. Room fanout. `/sudo`. |
-| `src/db.ts` | Schema, limits, rooms, `publish()`. |
-| `src/auth.ts` | better-auth. Same SQLite connection. |
-| `src/check.ts` | The test suite. Throws or prints `ok`. |
-| `src/shaders/crt/` | Canvas → texture → CRT fragment shader. |
-| `public/vaultboy.webp` | The easter egg. Long-cached. |
-| `Dockerfile` · `docker-compose.yml` | API image and VPS compose. |
-| `wrangler.toml` | Cloudflare static deploy. SPA fallback. |
+| Path                                | What it is                                                        |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| `app/page.tsx`                      | Renders `<Chat />`. The only interactive page.                    |
+| `app/privacy` · `app/terms`         | The product, in legal prose. Read these first if you want intent. |
+| `components/Chat.tsx`               | Shell, socket, auth, P2P, skins.                                  |
+| `components/MiniChat.tsx`           | Minimal UI.                                                       |
+| `components/ui/`                    | shadcn pieces.                                                    |
+| `lib/shell.ts`                      | Help text, SSH parse, room id rules.                              |
+| `lib/p2p.ts`                        | Trystero rooms. Shared `Wire` types. Mesh cap 6.                  |
+| `lib/auth-client.ts`                | better-auth browser client, credentials included.                 |
+| `src/server.ts`                     | Hono HTTP + WebSocket. Room fanout. `/sudo`.                      |
+| `src/db.ts`                         | Schema, limits, rooms, `publish()`.                               |
+| `src/auth.ts`                       | better-auth. Same SQLite connection.                              |
+| `src/check.ts`                      | The test suite. Throws or prints `ok`.                            |
+| `src/shaders/crt/`                  | Canvas → texture → CRT fragment shader.                           |
+| `public/vaultboy.webp`              | The easter egg. Long-cached.                                      |
+| `Dockerfile` · `docker-compose.yml` | API image and VPS compose.                                        |
+| `wrangler.toml`                     | Cloudflare static deploy. SPA fallback.                           |
 
 Pages: `/` · `/privacy` · `/terms`.
 
